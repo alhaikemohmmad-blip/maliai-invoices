@@ -50,7 +50,10 @@ details small{ display:block; color:var(--fg2); margin:6px 0; }
 .row{ display:flex; gap:6px; margin-top:6px; }
 #send{ flex:1; padding:8px; border:0; background:var(--accent); color:#fff; font-weight:600; }
 #send:disabled{ opacity:.5; cursor:default; }
-#stop, #newchat{ padding:8px 10px; border:1px solid var(--line); background:var(--bg2); color:var(--fg); }
+#stop, #newchat, #attach{ padding:8px 10px; border:1px solid var(--line); background:var(--bg2); color:var(--fg); }
+#tab-chat.over #ask{ border-color:var(--accent); }
+#chips{ font-size:12px; color:var(--fg2); margin-bottom:4px; }
+#chips button{ padding:0 6px; border:0; background:none; color:var(--err); }
 </style>
 </head>
 <body>
@@ -62,8 +65,11 @@ details small{ display:block; color:var(--fg2); margin:6px 0; }
 
 <section id="tab-chat" role="tabpanel" hidden>
   <div id="chat"></div>
-  <textarea id="ask" rows="3" placeholder="مثلاً: اعمل شيت ملخّص للفواتير حسب الحساب والشهر، مع المجاميع ورسم بياني"></textarea>
+  <div id="chips" hidden></div>
+  <textarea id="ask" rows="3" placeholder="مثلاً: فرّغ الفواتير المرفقة بشيت «المصاريف» تحت آخر صفّ، بنفس ترتيب أعمدته"></textarea>
+  <input id="cfiles" type="file" multiple hidden>
   <div class="row">
+    <button id="attach" type="button" title="أرفق فواتير (أو اسحبها أو الصقها هون)">📎 أرفق</button>
     <button id="send" type="button">ابعت</button>
     <button id="stop" type="button" hidden>وقّف</button>
     <button id="newchat" type="button">محادثة جديدة</button>
@@ -181,7 +187,7 @@ const drop = $("drop");
 drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
 drop.ondragleave = () => drop.classList.remove("over");
 drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); addFiles(e.dataTransfer.files); };
-document.onpaste = e => { if (!$("tab-inv").hidden) addFiles(e.clipboardData.files); };
+document.onpaste = e => { (!$("tab-inv").hidden ? addFiles : attachFiles)(e.clipboardData.files); };
 $("clear").onclick = () => { queue.length = 0; $("list").innerHTML = ""; addFiles([]); setStatus(""); };
 
 // ---------- أيّ ملف ← صور JPEG صغيرة أو نصّ ----------
@@ -433,6 +439,7 @@ How you work:
 - Never delete, clear or overwrite existing data without the accountant's explicit yes in this conversation; only then pass overwrite or confirmed.
 - Work in blocks: write headers and all formulas of a table in one write_range call, not cell by cell.
 - The invoice tab of this add-in fills the sheets «الفواتير» (one row per invoice) and «البنود» (one row per line item); reuse them when the accountant asks about invoices.
+- When the accountant attaches invoices (each file arrives as a line with its name, then its page images or extracted text), book them the way they ask: first read the target sheet's header row and its last used row, map every field to those exact columns in that order, and append below the existing rows; never overwrite. If they don't say where, use «الفواتير» (${INV_HEAD.join(" | ")}) and «البنود» (${ITEM_HEAD.join(" | ")}), creating them with these headers if missing. Check every invoice (each line's quantity × unit price, the sum of lines, subtotal + tax = total, the 16% rate, the seller's tax number), read back what you wrote and confirm it matches the invoice, and list anything unclear instead of guessing.
 - When you finish, say in one to three lines what you built, where (sheet and range), and what you verified.`;
 
 const MAX_CELLS = 4000;   // حدّ القراءة بالنداء الواحد
@@ -702,19 +709,61 @@ async function selectionNote() {
   } catch (e) { return ""; }
 }
 
+// ---------- مرفقات المحادثة ----------
+const MAX_ATTACH = 10;   // ponytail: أكثر من هيك استعمل تبويب «تفريغ الفواتير» (أسرع وأرخص للدفعات الكبيرة)
+let attached = [];
+function attachFiles(files) {
+  for (const f of files) if (attached.length < MAX_ATTACH) attached.push(f);
+  $("chips").hidden = !attached.length;
+  $("chips").innerHTML = attached.length ? `📎 ${attached.length}: <span></span><button type="button" title="شيل المرفقات">✕</button>` : "";
+  if (attached.length) {
+    $("chips").querySelector("span").textContent = attached.map(f => f.name || "صورة ملصوقة").join("، ");
+    $("chips").querySelector("button").onclick = () => { attached = []; attachFiles([]); };
+  }
+  if (files.length && attached.length >= MAX_ATTACH) $("cstatus").textContent = `الحدّ ${MAX_ATTACH} ملفات بالرسالة — للدفعات الكبيرة استعمل «تفريغ الفواتير».`;
+}
+$("attach").onclick = () => $("cfiles").click();
+$("cfiles").onchange = e => { attachFiles(e.target.files); e.target.value = ""; };
+const chatTab = $("tab-chat");
+chatTab.ondragover = e => { e.preventDefault(); chatTab.classList.add("over"); };
+chatTab.ondragleave = () => chatTab.classList.remove("over");
+chatTab.ondrop = e => { e.preventDefault(); chatTab.classList.remove("over"); attachFiles(e.dataTransfer.files); };
+
+// كل ملف ← سطر باسمه + صوره أو نصّه (نفس قرّاء تبويب التفريغ)
+async function attachmentBlocks(files) {
+  const parts = await Promise.all(files.map(f => toParts(f).catch(e => ({ error: e.message || String(e) }))));
+  const blocks = [], failed = [];
+  parts.forEach((p, i) => {
+    const name = files[i].name || "صورة ملصوقة";
+    if (p.error || (!(p.images || []).length && !(p.text || "").trim())) { failed.push(`${name}: ${p.error || "فاضي"}`); return; }
+    blocks.push({ type: "text", text: `Attached invoice file: ${name}` + (p.text ? `\n${p.text.slice(0, MAX_TEXT)}` : "") });
+    for (const url of p.images || []) blocks.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: url.slice(url.indexOf(",") + 1) } });
+  });
+  return { blocks, failed };
+}
+
 async function chatSend() {
-  const text = $("ask").value.trim();
+  const files = attached;
+  const text = $("ask").value.trim() || (files.length ? "فرّغ الفواتير المرفقة." : "");
   if (!text) return;
   const c = readCfg();
   if (c.provider !== "anthropic" || !c.key) { $("settings").open = true; say("err", "مساعد إكسل بيشتغل مع Claude: اختار Anthropic من الإعدادات وحط المفتاح."); return; }
   if (!inExcel) say("err", "الصفحة مش داخل إكسل، فالأدوات ما رح تقدر توصل للملف.");
-  $("ask").value = ""; say("me", text);
+  $("ask").value = ""; attached = []; attachFiles([]);
+  say("me", text + (files.length ? "\n📎 " + files.map(f => f.name || "صورة ملصوقة").join("، ") : ""));
   $("send").disabled = true; $("stop").hidden = false; stopAsked = false;
   const fb = /^claude-(opus-5|fable-5|sonnet-5-5)/.test(c.model) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" } : {};
+  let blocks = [];
+  if (files.length) {
+    $("cstatus").textContent = "بجهّز المرفقات…";
+    const a = await attachmentBlocks(files);
+    blocks = a.blocks;
+    if (a.failed.length) say("err", "ما قدرت أقرأ:\n" + a.failed.join("\n"));
+  }
   // إذا الدور اللي قبل وقف (خطأ أو «وقّف») بعد نتائج أدوات ما انبعتت، الكلام الجديد بينضمّ لنفس رسالة المستخدم
-  const note = { type: "text", text: text + await selectionNote() };
+  const note = [...blocks, { type: "text", text: text + await selectionNote() }];
   const last = CHAT[CHAT.length - 1];
-  if (last && last.role === "user") last.content.push(note); else CHAT.push({ role: "user", content: [note] });
+  if (last && last.role === "user") last.content.push(...note); else CHAT.push({ role: "user", content: note });
   let Anthropic = null;
   try {
     ({ default: Anthropic } = await import(ANTHROPIC_SDK));
