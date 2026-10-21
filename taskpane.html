@@ -84,17 +84,29 @@ const LIBS = {
 };
 const ANTHROPIC_SDK = "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.131.0/+esm";
 
-const INV_HEAD  = ["الملف", "المورّد", "الرقم الضريبي", "رقم الفاتورة", "التاريخ", "العملة", "قبل الضريبة", "الضريبة", "الإجمالي", "ملاحظة"];
-const ITEM_HEAD = ["الملف", "رقم الفاتورة", "البند", "الكمية", "سعر الوحدة", "القيمة"];
+// الأعمدة الجديدة بتنضاف بالآخر عشان الصفوف القديمة بالشيت تضلّ تحت عناوينها
+const INV_HEAD  = ["الملف", "المورّد", "الرقم الضريبي", "رقم الفاتورة", "التاريخ", "العملة", "قبل الضريبة", "الضريبة", "الإجمالي", "ملاحظات المحاسب", "الحساب", "نسبة الضريبة %"];
+const ITEM_HEAD = ["الملف", "رقم الفاتورة", "البند", "الكمية", "سعر الوحدة", "القيمة", "تدقيق"];
 
-const PROMPT = `You extract data from one invoice (Arabic or English), given as page images and/or extracted text (CSV, HTML, or XML such as a UBL e-invoice).
+// ponytail: دليل حسابات عامّ، بدّله بدليل حسابات الشركة لمّا يوصلنا
+const ACCOUNTS = ["مشتريات بضاعة", "مستلزمات مكتبية", "صيانة وإصلاح", "محروقات ومواصلات", "كهرباء ومياه", "اتصالات وإنترنت",
+  "إيجارات", "ضيافة ونظافة", "رسوم حكومية", "أتعاب مهنية", "دعاية وإعلان", "أصول ثابتة", "أخرى"];
+
+const SYSTEM = `You are a senior chartered accountant in Jordan with audit experience.
+You read every invoice the way an accountant books it: carefully, never guessing, and you flag anything an auditor would question.
+You know the Jordanian General Sales Tax: the standard rate is 16%; some goods and services are 0%, exempt, or at special rates; a valid tax invoice shows the seller's tax number.`;
+
+const PROMPT = `Book this one invoice (Arabic or English), given as page images and/or extracted text (CSV, HTML, or XML such as a UBL e-invoice).
 Return ONLY one JSON object, no prose, exactly this shape:
 {"vendor":"","vendor_tax_no":"","invoice_no":"","date":"YYYY-MM-DD","currency":"",
  "items":[{"description":"","qty":0,"unit_price":0,"total":0}],
- "subtotal":0,"tax":0,"total":0}
+ "subtotal":0,"tax":0,"total":0,"account":"","notes":""}
 Rules: numbers as plain JSON numbers with Western digits (convert ٠-٩), no thousands separators.
 Use null for anything not on the invoice. Never guess. Keep descriptions in the invoice's language.
-currency as ISO code (JOD, USD, ...). One entry in items per line on the invoice.`;
+currency as ISO code (JOD, USD, ...). One entry in items per line on the invoice.
+account: the single best booking account for this invoice, exactly one of: ${ACCOUNTS.join(" | ")}.
+notes: short Arabic remarks, only for what an accountant must check before booking (missing seller tax number, unusual tax rate,
+illegible or handwritten amounts, not a tax invoice, totals that don't add up, date in the future); "" if nothing.`;
 
 const $ = id => document.getElementById(id);
 const queue = [];   // [{file, li}]
@@ -239,6 +251,7 @@ async function askClaude(images, prompt, c) {
       model: c.model, max_tokens: 16000,
       output_config: { effort: "low" },   // استخراج بسيط: low أسرع
       ...fb,
+      system: SYSTEM,
       messages: [{ role: "user", content: [
         ...images.map(url => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: url.slice(url.indexOf(",") + 1) } })),
         { type: "text", text: prompt }
@@ -258,7 +271,8 @@ async function askClaude(images, prompt, c) {
 async function askOpenAI(images, prompt, c) {
   const body = JSON.stringify({
     model: c.model, temperature: 0,
-    messages: [{ role: "user", content: [{ type: "text", text: prompt }, ...images.map(url => ({ type: "image_url", image_url: { url } }))] }]
+    messages: [{ role: "system", content: SYSTEM },
+               { role: "user", content: [{ type: "text", text: prompt }, ...images.map(url => ({ type: "image_url", image_url: { url } }))] }]
   });
   for (let attempt = 1; ; attempt++) {
     const r = await fetch(c.url.replace(/\/+$/, "") + "/chat/completions", {
@@ -291,9 +305,17 @@ function toRows(name, inv) {
   if (sub !== "" && tax !== "" && tot !== "" && Math.abs(sub + tax - tot) > 0.01) notes.push("قبل الضريبة + الضريبة ≠ الإجمالي");
   const sumItems = items.reduce((a, i) => a + (num(i.total) || 0), 0);
   if (items.length && sub !== "" && Math.abs(sumItems - sub) > 0.01) notes.push("مجموع البنود ≠ قبل الضريبة");
+  const rate = sub && tax !== "" ? Math.round(tax / sub * 10000) / 100 : "";
+  if (rate !== "" && rate !== 0 && Math.abs(rate - 16) > 0.1) notes.push(`نسبة الضريبة ${rate}% مش 16% — تأكّد منها`);
+  if (!txt(inv.vendor_tax_no).trim() && tax) notes.push("في ضريبة بس ما في رقم ضريبي للمورّد");
+  if (txt(inv.notes).trim()) notes.push(txt(inv.notes).trim());
   return {
-    inv: [name, txt(inv.vendor), txt(inv.vendor_tax_no), txt(inv.invoice_no), txt(inv.date), txt(inv.currency), sub, tax, tot, notes.join(" · ")],
-    items: items.map(i => [name, txt(inv.invoice_no), txt(i.description), num(i.qty), num(i.unit_price), num(i.total)])
+    inv: [name, txt(inv.vendor), txt(inv.vendor_tax_no), txt(inv.invoice_no), txt(inv.date), txt(inv.currency), sub, tax, tot, notes.join(" · "), txt(inv.account), rate],
+    items: items.map(i => {
+      const q = num(i.qty), p = num(i.unit_price), t = num(i.total);
+      const bad = q !== "" && p !== "" && t !== "" && Math.abs(q * p - t) > 0.01;
+      return [name, txt(inv.invoice_no), txt(i.description), q, p, t, bad ? "الكمية × السعر ≠ القيمة" : ""];
+    })
   };
 }
 
@@ -311,13 +333,13 @@ async function writeToExcel(invRows, itemRows) {
     }
     await ctx.sync();
     for (const s of sheets) {
-      const start = s.used.isNullObject ? 0 : s.used.rowIndex + s.used.rowCount;
-      const data = start === 0 ? [s.head, ...s.rows] : s.rows;
-      if (!data.length) continue;
+      const start = s.used.isNullObject ? 1 : Math.max(1, s.used.rowIndex + s.used.rowCount);   // الصفّ 1 للعناوين
       const last = colName(s.head.length);
-      s.ws.getRange(`A${start + 1}:${last}${start + data.length}`).values = data;
-      if (start === 0) s.ws.getRange(`A1:${last}1`).format.font.bold = true;
-      s.ws.getRange(`A1:${last}${start + data.length}`).format.autofitColumns();
+      const header = s.ws.getRange(`A1:${last}1`);
+      header.values = [s.head];   // كل مرّة: شيت من نسخة أقدم بياخد العناوين الجديدة
+      header.format.font.bold = true;
+      if (s.rows.length) s.ws.getRange(`A${start + 1}:${last}${start + s.rows.length}`).values = s.rows;
+      s.ws.getRange(`A1:${last}${start + s.rows.length}`).format.autofitColumns();
     }
     sheets[0].ws.activate();
     await ctx.sync();
