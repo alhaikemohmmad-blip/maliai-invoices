@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MaliAI — تركيب الإضافة</title>
+<style>
+:root{ --bg:#fff; --bg2:#f4f6f8; --fg:#1b1d21; --fg2:#5b6270; --line:#dfe3e8; --accent:#107c41; }
+@media (prefers-color-scheme: dark){ :root{ --bg:#1b1d21; --bg2:#25282c; --fg:#eceef1; --fg2:#a2a9b5; --line:#363a40; --accent:#2ea866; } }
+body{ margin:0 auto; max-width:640px; padding:24px 16px; background:var(--bg); color:var(--fg); font:16px/1.7 "Segoe UI",Tahoma,sans-serif; }
+h1{ margin:0; font-size:26px; } h1 b{ color:var(--accent); }
+h2{ font-size:18px; margin:28px 0 6px; }
+p, li{ color:var(--fg2); } b, strong{ color:var(--fg); }
+.btn{ display:inline-block; margin:18px 0 6px; padding:12px 22px; border-radius:10px; background:var(--accent); color:#fff; font-weight:600; text-decoration:none; }
+.btn:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
+section{ background:var(--bg2); border:1px solid var(--line); border-radius:12px; padding:4px 18px; margin-top:14px; }
+ol{ padding-inline-start:20px; }
+</style>
+</head>
+<body>
+<h1><b>MaliAI</b> · تفريغ الفواتير لإكسل</h1>
+<p>بتسحب الفاتورة (صورة، PDF، Word، Excel، أو XML الفوترة) وبتنكتب بجدول إكسل خلال ثواني.</p>
+
+<a class="btn" href="MaliAI-TaskPane.xml" download="MaliAI.xml">نزّل ملف الإضافة</a>
+<p>بعدها ركّبها مرّة وحدة بس، بإحدى الطرق هاي:</p>
+
+<section>
+  <h2>إكسل على النت (الأسرع)</h2>
+  <ol>
+    <li>افتح أيّ ملف إكسل على <strong>excel.cloud.microsoft</strong>.</li>
+    <li><strong>Home</strong> ← <strong>Add-ins</strong> ← <strong>More Settings</strong>.</li>
+    <li><strong>Upload My Add-in</strong> ← اختار الملف <strong>MaliAI.xml</strong> ← <strong>Upload</strong>.</li>
+    <li>بيطلعلك زر <strong>تفريغ الفواتير</strong> بتبويب Home.</li>
+  </ol>
+</section>
+
+<section>
+  <h2>إكسل على الكمبيوتر</h2>
+  <ol>
+    <li>حط <strong>MaliAI.xml</strong> بمجلّد، وشاركه: كليك يمين ← Properties ← Sharing ← Share. وانسخ مساره (مثل <bdi>\\PC-NAME\MaliAI</bdi>).</li>
+    <li>بإكسل: <strong>File</strong> ← <strong>Options</strong> ← <strong>Trust Center</strong> ← <strong>Trust Center Settings</strong> ← <strong>Trusted Add-in Catalogs</strong>.</li>
+    <li>الصق المسار بـ Catalog Url ← <strong>Add catalog</strong> ← علّم <strong>Show in Menu</strong> ← OK. سكّر إكسل وافتحه.</li>
+    <li><strong>Home</strong> ← <strong>Add-ins</strong> ← <strong>More Add-ins</strong> ← <strong>SHARED FOLDER</strong> ← MaliAI ← <strong>Add</strong>.</li>
+  </ol>
+</section>
+
+<section>
+  <h2>شركة عندها Microsoft 365</h2>
+  <p>مدير الحسابات بيرفع الملف مرّة وحدة من <strong>Microsoft 365 admin center</strong> ← Settings ← <strong>Integrated apps</strong> ← <strong>Upload custom apps</strong>، وبتظهر الإضافة لحالها بإكسل عند كلّ الموظّفين اللي بيختارهم (ممكن تاخد لحدّ يوم).</p>
+</section>
+</body>
+</html>

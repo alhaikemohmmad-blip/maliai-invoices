@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MaliAI — تفريغ الفواتير</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+:root{
+  --bg:#ffffff; --bg2:#f4f6f8; --fg:#1b1d21; --fg2:#5b6270;
+  --line:#dfe3e8; --accent:#107c41; --accent2:#0d6435; --err:#c0392b;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#1b1d21; --bg2:#25282c; --fg:#eceef1; --fg2:#a2a9b5; --line:#363a40; --accent:#2ea866; --accent2:#3cc078; --err:#ff7b6b; }
+}
+*{ box-sizing:border-box; }
+body{ margin:0; padding:12px; background:var(--bg); color:var(--fg); font:14px/1.5 "Segoe UI",Tahoma,sans-serif; }
+header{ font-size:16px; margin-bottom:10px; }
+header b{ color:var(--accent); }
+.drop{ display:block; padding:18px 12px; border:2px dashed var(--line); border-radius:10px; background:var(--bg2); text-align:center; cursor:pointer; }
+.drop.over, .drop:focus-within{ border-color:var(--accent); }
+.drop small{ display:block; color:var(--fg2); }
+ul{ list-style:none; padding:0; margin:10px 0; }
+li{ padding:6px 8px; border-bottom:1px solid var(--line); font-size:13px; }
+li .st{ display:block; color:var(--fg2); }
+li.err .st{ color:var(--err); }
+button{ font:inherit; border-radius:8px; cursor:pointer; }
+#go{ width:100%; padding:10px; border:0; background:var(--accent); color:#fff; font-weight:600; }
+#go:hover{ background:var(--accent2); }
+#go:disabled{ opacity:.5; cursor:default; }
+#clear, #save{ padding:4px 10px; border:1px solid var(--line); background:var(--bg2); color:var(--fg); }
+button:focus-visible, input:focus-visible, select:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+#status{ min-height:1.5em; color:var(--fg2); }
+details{ margin-top:14px; border-top:1px solid var(--line); padding-top:8px; }
+summary{ cursor:pointer; color:var(--fg2); }
+details label{ display:block; margin:8px 0 2px; font-size:13px; }
+details input, details select{ width:100%; padding:6px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); font:inherit; }
+details small{ display:block; color:var(--fg2); margin:6px 0; }
+</style>
+</head>
+<body>
+<header><b>MaliAI</b> · تفريغ الفواتير لإكسل</header>
+
+<label id="drop" class="drop">
+  <input id="files" type="file" multiple hidden>
+  <b>اسحب الفواتير هون أو اكبس للاختيار</b>
+  <small>صور · PDF · Word · Excel · XML الفوترة · أو الصق صورة بـ Ctrl+V</small>
+</label>
+<ul id="list"></ul>
+<button id="go" disabled>فرّغ لإكسل</button>
+<p id="status" role="status" aria-live="polite"></p>
+<button id="clear" type="button" hidden>فضّي القائمة</button>
+
+<details id="settings">
+  <summary>الإعدادات — مفتاح الذكاء الاصطناعي</summary>
+  <label for="prov">المزوّد</label><select id="prov"></select>
+  <label for="model">النموذج</label><input id="model" dir="ltr">
+  <label for="url">الرابط</label><input id="url" dir="ltr">
+  <label for="key">المفتاح</label><input id="key" type="password" dir="ltr" autocomplete="off">
+  <small>المفتاح بينحفظ على جهازك بس، مش بكود الصفحة.</small>
+  <button id="save" type="button">احفظ</button>
+</details>
+
+<script>
+const PROVIDERS = {
+  gemini:     { label: "Google Gemini (سريع، مفتاح مجاني من aistudio.google.com)", url: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-flash-latest" },
+  openrouter: { label: "OpenRouter", url: "https://openrouter.ai/api/v1", model: "google/gemini-2.5-flash" },
+  custom:     { label: "مخصّص (صيغة OpenAI)", url: "", model: "" }
+};
+const CFG_KEY = "maliai.invoices.cfg";
+const MAX_SIDE = 1600;    // أكبر ضلع للصورة المرسلة: أصغر = أسرع رفع
+const MAX_PAGES = 3;      // ponytail: أوّل 3 صفحات من كل PDF/TIFF، زيدها إذا في فواتير أطول
+const MAX_TEXT = 60000;   // ponytail: أوّل 60 ألف حرف من الملفات النصّيّة (Excel/Word/XML)
+const PARALLEL = 4;       // فواتير بنفس الوقت، نزّلها إذا المزوّد بيرجّع 429
+
+// قرّاء الصيغ الثانية بينحمّلوا بس لمّا ييجي ملف بيحتاجهم
+const LIBS = {
+  xlsx:    "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js",
+  mammoth: "https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js",
+  heic:    "https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js",
+  utif:    "https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.js"
+};
+
+const INV_HEAD  = ["الملف", "المورّد", "الرقم الضريبي", "رقم الفاتورة", "التاريخ", "العملة", "قبل الضريبة", "الضريبة", "الإجمالي", "ملاحظة"];
+const ITEM_HEAD = ["الملف", "رقم الفاتورة", "البند", "الكمية", "سعر الوحدة", "القيمة"];
+
+const PROMPT = `You extract data from one invoice (Arabic or English), given as page images and/or extracted text (CSV, HTML, or XML such as a UBL e-invoice).
+Return ONLY one JSON object, no prose, exactly this shape:
+{"vendor":"","vendor_tax_no":"","invoice_no":"","date":"YYYY-MM-DD","currency":"",
+ "items":[{"description":"","qty":0,"unit_price":0,"total":0}],
+ "subtotal":0,"tax":0,"total":0}
+Rules: numbers as plain JSON numbers with Western digits (convert ٠-٩), no thousands separators.
+Use null for anything not on the invoice. Never guess. Keep descriptions in the invoice's language.
+currency as ISO code (JOD, USD, ...). One entry in items per line on the invoice.`;
+
+const $ = id => document.getElementById(id);
+const queue = [];   // [{file, li}]
+let inExcel = false;
+
+// ---------- الإعدادات (على الجهاز فقط) ----------
+const readCfg = () => { try { return JSON.parse(localStorage.getItem(CFG_KEY)) || {}; } catch (e) { return {}; } };
+function fillCfg() {
+  const c = readCfg(), p = c.provider || "gemini";
+  $("prov").innerHTML = Object.entries(PROVIDERS).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join("");
+  $("prov").value = p;
+  $("url").value = c.url || PROVIDERS[p].url;
+  $("model").value = c.model || PROVIDERS[p].model;
+  $("key").value = c.key || "";
+  if (!c.key) $("settings").open = true;
+}
+$("prov").onchange = () => {
+  const p = PROVIDERS[$("prov").value];
+  if (p.url) { $("url").value = p.url; $("model").value = p.model; }
+};
+$("save").onclick = () => {
+  const c = { provider: $("prov").value, url: $("url").value.trim(), model: $("model").value.trim(), key: $("key").value.trim() };
+  try { localStorage.setItem(CFG_KEY, JSON.stringify(c)); setStatus("انحفظت الإعدادات."); } catch (e) { setStatus("ما قدرت أحفظ الإعدادات بهالجهاز."); }
+  if (c.key) $("settings").open = false;
+};
+
+// ---------- إضافة الملفات ----------
+function addFiles(files) {
+  for (const file of files) {
+    const li = document.createElement("li");
+    li.innerHTML = `<span></span><span class="st">جاهزة</span>`;
+    li.firstChild.textContent = file.name || "صورة ملصوقة";
+    $("list").append(li);
+    queue.push({ file, li });
+  }
+  $("go").disabled = !queue.length;
+  $("clear").hidden = !queue.length;
+}
+$("files").onchange = e => { addFiles(e.target.files); e.target.value = ""; };
+const drop = $("drop");
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); addFiles(e.dataTransfer.files); };
+document.onpaste = e => addFiles(e.clipboardData.files);
+$("clear").onclick = () => { queue.length = 0; $("list").innerHTML = ""; addFiles([]); setStatus(""); };
+
+// ---------- أيّ ملف ← صور JPEG صغيرة أو نصّ ----------
+const loaded = {};
+const lib = name => loaded[name] || (loaded[name] = new Promise((ok, bad) => {
+  const s = document.createElement("script");
+  s.src = LIBS[name]; s.onload = ok;
+  s.onerror = () => { delete loaded[name]; bad(new Error("ما قدرت أحمّل قارئ هالصيغة — تأكّد من النت")); };
+  document.head.append(s);
+}));
+function canvasFor(w, h) {
+  const c = document.createElement("canvas");
+  c.width = Math.round(w); c.height = Math.round(h);
+  const g = c.getContext("2d");
+  g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height);   // الشفاف بيطلع أسود بـ JPEG
+  return [c, g];
+}
+function shrink(src, w, h) {   // src: صورة أو canvas بحجمها الأصلي
+  const s = Math.min(1, MAX_SIDE / Math.max(w, h));
+  const [c, g] = canvasFor(w * s, h * s);
+  g.drawImage(src, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", 0.85);
+}
+async function toParts(file) {
+  const ext = (file.name || "").toLowerCase().split(".").pop();
+  if (file.type === "application/pdf" || ext === "pdf") {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+    const images = [];
+    for (let n = 1; n <= Math.min(pdf.numPages, MAX_PAGES); n++) {
+      const page = await pdf.getPage(n);
+      const v1 = page.getViewport({ scale: 1 });
+      const vp = page.getViewport({ scale: MAX_SIDE / Math.max(v1.width, v1.height) });
+      const [c, g] = canvasFor(vp.width, vp.height);
+      // intent "print": الرسم ما بيستنّى requestAnimationFrame، اللي بيوقف إذا اللوحة مخفيّة
+      await page.render({ canvasContext: g, viewport: vp, intent: "print" }).promise;
+      images.push(c.toDataURL("image/jpeg", 0.85));
+    }
+    return { images };
+  }
+  if (/^(heic|heif)$/.test(ext) || /hei[cf]/.test(file.type)) {   // صور الآيفون
+    await lib("heic");
+    const jpg = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.9 });
+    const bmp = await createImageBitmap(Array.isArray(jpg) ? jpg[0] : jpg);
+    return { images: [shrink(bmp, bmp.width, bmp.height)] };
+  }
+  if (/^tiff?$/.test(ext) || file.type === "image/tiff") {           // السكانرات
+    await lib("utif");
+    const buf = await file.arrayBuffer();
+    const pages = UTIF.decode(buf).filter(p => p.t256).slice(0, MAX_PAGES);   // t256 = العرض؛ width بينعبّى بعد decodeImage
+    return { images: pages.map(p => {
+      UTIF.decodeImage(buf, p);
+      const c = document.createElement("canvas"); c.width = p.width; c.height = p.height;
+      c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(UTIF.toRGBA8(p)), p.width, p.height), 0, 0);
+      return shrink(c, p.width, p.height);
+    }) };
+  }
+  if (/^(xlsx|xlsm|xlsb|xls|ods)$/.test(ext)) {
+    await lib("xlsx");
+    const wb = XLSX.read(await file.arrayBuffer());
+    return { text: wb.SheetNames.map(n => "# " + n + "\n" + XLSX.utils.sheet_to_csv(wb.Sheets[n])).join("\n\n") };
+  }
+  if (ext === "docx") {
+    await lib("mammoth");
+    const r = await mammoth.convertToHtml({ arrayBuffer: await file.arrayBuffer() },
+      { convertImage: mammoth.images.imgElement(() => Promise.resolve({ src: "" })) });
+    return { text: r.value };
+  }
+  try {
+    const bmp = await createImageBitmap(file);
+    return { images: [shrink(bmp, bmp.width, bmp.height)] };
+  } catch (e) {}
+  const text = await file.text();   // XML / CSV / TXT / HTML / EML…
+  if (!text.trim() || text.slice(0, 2000).includes("\u0000"))
+    throw new Error(`صيغة .${ext} مش مدعومة — حوّلها PDF أو صورة`);
+  return { text };
+}
+
+// ---------- نداء واحد للنموذج لكل فاتورة ----------
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function extract({ images = [], text = "" }, c) {
+  if (!images.length && !text.trim()) throw new Error("ما لقيت إشي أقرأه بالملف");
+  const prompt = text ? PROMPT + "\n\nInvoice content:\n" + text.slice(0, MAX_TEXT) : PROMPT;
+  const body = JSON.stringify({
+    model: c.model, temperature: 0,
+    messages: [{ role: "user", content: [{ type: "text", text: prompt }, ...images.map(url => ({ type: "image_url", image_url: { url } }))] }]
+  });
+  for (let attempt = 1; ; attempt++) {
+    const r = await fetch(c.url.replace(/\/+$/, "") + "/chat/completions", {
+      method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + c.key }, body
+    });
+    const raw = await r.text();
+    if ((r.status === 429 || r.status >= 500) && attempt < 3) { await sleep(2000 * attempt); continue; }
+    if (r.status === 401 || r.status === 403) throw new Error("المفتاح مرفوض — صلّحه من الإعدادات");
+    if (r.status === 404) throw new Error("اسم النموذج أو الرابط غلط — صلّحه من الإعدادات");
+    if (r.status === 429) throw new Error("وصلت حدّ المزوّد، استنّى دقيقة وجرّب");
+    let j = null; try { j = JSON.parse(raw); } catch (e) {}
+    if (!r.ok) throw new Error((j && j.error && j.error.message) || ("خطأ " + r.status));
+    const content = (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
+    const m = String(content).match(/\{[\s\S]*\}/);
+    if (!m) throw new Error("النموذج ما رجّع بيانات مفهومة");
+    return JSON.parse(m[0]);
+  }
+}
+
+// ---------- JSON ← صفوف ----------
+function num(v) {
+  if (typeof v === "number") return v;
+  if (v == null || v === "") return "";
+  const s = String(v).replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/٫/g, ".").replace(/[^\d.\-]/g, "");
+  const n = parseFloat(s);
+  return isNaN(n) ? "" : n;
+}
+const txt = v => v == null ? "" : String(v);
+function toRows(name, inv) {
+  const items = Array.isArray(inv.items) ? inv.items : [];
+  const sub = num(inv.subtotal), tax = num(inv.tax), tot = num(inv.total);
+  const notes = [];
+  if (sub !== "" && tax !== "" && tot !== "" && Math.abs(sub + tax - tot) > 0.01) notes.push("قبل الضريبة + الضريبة ≠ الإجمالي");
+  const sumItems = items.reduce((a, i) => a + (num(i.total) || 0), 0);
+  if (items.length && sub !== "" && Math.abs(sumItems - sub) > 0.01) notes.push("مجموع البنود ≠ قبل الضريبة");
+  return {
+    inv: [name, txt(inv.vendor), txt(inv.vendor_tax_no), txt(inv.invoice_no), txt(inv.date), txt(inv.currency), sub, tax, tot, notes.join(" · ")],
+    items: items.map(i => [name, txt(inv.invoice_no), txt(i.description), num(i.qty), num(i.unit_price), num(i.total)])
+  };
+}
+
+// ---------- كتابة كل شي بإكسل دفعة وحدة ----------
+function colName(n) { let s = ""; for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; }
+async function writeToExcel(invRows, itemRows) {
+  await Excel.run(async ctx => {
+    const sheets = [["الفواتير", INV_HEAD, invRows], ["البنود", ITEM_HEAD, itemRows]]
+      .map(([name, head, rows]) => ({ name, head, rows, ws: ctx.workbook.worksheets.getItemOrNullObject(name) }));
+    await ctx.sync();
+    for (const s of sheets) {
+      if (s.ws.isNullObject) s.ws = ctx.workbook.worksheets.add(s.name);
+      s.used = s.ws.getUsedRangeOrNullObject(true);
+      s.used.load("rowIndex,rowCount");
+    }
+    await ctx.sync();
+    for (const s of sheets) {
+      const start = s.used.isNullObject ? 0 : s.used.rowIndex + s.used.rowCount;
+      const data = start === 0 ? [s.head, ...s.rows] : s.rows;
+      if (!data.length) continue;
+      const last = colName(s.head.length);
+      s.ws.getRange(`A${start + 1}:${last}${start + data.length}`).values = data;
+      if (start === 0) s.ws.getRange(`A1:${last}1`).format.font.bold = true;
+      s.ws.getRange(`A1:${last}${start + data.length}`).format.autofitColumns();
+    }
+    sheets[0].ws.activate();
+    await ctx.sync();
+  });
+}
+
+// ---------- التشغيل ----------
+function setStatus(t) { $("status").textContent = t; }
+async function run() {
+  const c = readCfg();
+  if (!c.key || !c.url || !c.model) { $("settings").open = true; setStatus("حط المفتاح بالإعدادات واحفظ أوّل."); return; }
+  const jobs = queue.slice();
+  $("go").disabled = true;
+  const t0 = performance.now(), results = new Array(jobs.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(PARALLEL, jobs.length) }, async () => {
+    while (next < jobs.length) {
+      const i = next++, { file, li } = jobs[i], st = li.querySelector(".st"), t = performance.now();
+      li.className = "";
+      try {
+        st.textContent = "بقرأ الملف…";
+        const parts = await toParts(file);
+        st.textContent = "بفرّغ…";
+        const inv = await extract(parts, c);
+        results[i] = toRows(file.name || "صورة ملصوقة", inv);
+        st.textContent = `✓ ${txt(inv.vendor) || "؟"} · ${txt(inv.total)} ${txt(inv.currency)} · ${((performance.now() - t) / 1000).toFixed(1)} ث`;
+      } catch (e) {
+        li.className = "err";
+        st.textContent = "✗ " + (e.message || e);
+      }
+    }
+  }));
+  const done = results.filter(Boolean);
+  const secs = ((performance.now() - t0) / 1000).toFixed(1);
+  if (!done.length) { setStatus("ما انفرّغت ولا فاتورة."); $("go").disabled = false; return; }
+  if (!inExcel) { setStatus(`انفرّغت ${done.length} بـ ${secs} ث — بس الصفحة مش داخل إكسل، فما انكتبت.`); $("go").disabled = false; return; }
+  try {
+    await writeToExcel(done.map(r => r.inv), done.flatMap(r => r.items));
+    setStatus(`✓ انكتبت ${done.length} فاتورة بـ ${((performance.now() - t0) / 1000).toFixed(1)} ث (شيت «الفواتير» و«البنود»).`);
+    // اللي انكتبت بتطلع من القائمة، والفاشلة بتضل لإعادة المحاولة
+    for (let i = jobs.length - 1; i >= 0; i--) if (results[i]) { jobs[i].li.remove(); queue.splice(queue.indexOf(jobs[i]), 1); }
+  } catch (e) {
+    setStatus("ما قدرت أكتب بإكسل: " + (e.message || e));
+  }
+  addFiles([]);
+}
+$("go").onclick = run;
+
+fillCfg();
+Office.onReady(info => { inExcel = info.host === Office.HostType.Excel; });
+</script>
+</body>
+</html>
