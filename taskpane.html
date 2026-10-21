@@ -37,11 +37,41 @@ summary{ cursor:pointer; color:var(--fg2); }
 details label{ display:block; margin:8px 0 2px; font-size:13px; }
 details input, details select{ width:100%; padding:6px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); font:inherit; }
 details small{ display:block; color:var(--fg2); margin:6px 0; }
+.tabs{ display:flex; gap:6px; margin-bottom:12px; }
+.tabs button{ flex:1; padding:7px; border:1px solid var(--line); background:var(--bg2); color:var(--fg); }
+.tabs button[aria-selected="true"]{ background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+#chat{ display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
+.msg{ padding:8px 10px; border-radius:10px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.msg.me{ background:var(--bg2); border:1px solid var(--line); align-self:flex-start; max-width:90%; }
+.msg.ai{ border:1px solid var(--accent); }
+.msg.step{ padding:0 4px; color:var(--fg2); font-size:12px; }
+.msg.err{ color:var(--err); }
+#ask{ width:100%; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; resize:vertical; }
+.row{ display:flex; gap:6px; margin-top:6px; }
+#send{ flex:1; padding:8px; border:0; background:var(--accent); color:#fff; font-weight:600; }
+#send:disabled{ opacity:.5; cursor:default; }
+#stop, #newchat{ padding:8px 10px; border:1px solid var(--line); background:var(--bg2); color:var(--fg); }
 </style>
 </head>
 <body>
-<header><b>MaliAI</b> · تفريغ الفواتير لإكسل</header>
+<header><b>MaliAI</b> · محاسبك جوّا إكسل</header>
+<div class="tabs" role="tablist">
+  <button id="t-inv" role="tab" aria-selected="true" aria-controls="tab-inv">تفريغ الفواتير</button>
+  <button id="t-chat" role="tab" aria-selected="false" aria-controls="tab-chat">مساعد إكسل</button>
+</div>
 
+<section id="tab-chat" role="tabpanel" hidden>
+  <div id="chat"></div>
+  <textarea id="ask" rows="3" placeholder="مثلاً: اعمل شيت ملخّص للفواتير حسب الحساب والشهر، مع المجاميع ورسم بياني"></textarea>
+  <div class="row">
+    <button id="send" type="button">ابعت</button>
+    <button id="stop" type="button" hidden>وقّف</button>
+    <button id="newchat" type="button">محادثة جديدة</button>
+  </div>
+  <p id="cstatus" role="status" aria-live="polite"></p>
+</section>
+
+<section id="tab-inv" role="tabpanel">
 <label id="drop" class="drop">
   <input id="files" type="file" multiple hidden>
   <b>اسحب الفواتير هون أو اكبس للاختيار</b>
@@ -51,6 +81,7 @@ details small{ display:block; color:var(--fg2); margin:6px 0; }
 <button id="go" disabled>فرّغ لإكسل</button>
 <p id="status" role="status" aria-live="polite"></p>
 <button id="clear" type="button" hidden>فضّي القائمة</button>
+</section>
 
 <details id="settings">
   <summary>الإعدادات — مفتاح الذكاء الاصطناعي</summary>
@@ -150,7 +181,7 @@ const drop = $("drop");
 drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
 drop.ondragleave = () => drop.classList.remove("over");
 drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); addFiles(e.dataTransfer.files); };
-document.onpaste = e => addFiles(e.clipboardData.files);
+document.onpaste = e => { if (!$("tab-inv").hidden) addFiles(e.clipboardData.files); };
 $("clear").onclick = () => { queue.length = 0; $("list").innerHTML = ""; addFiles([]); setStatus(""); };
 
 // ---------- أيّ ملف ← صور JPEG صغيرة أو نصّ ----------
@@ -387,6 +418,360 @@ async function run() {
   addFiles([]);
 }
 $("go").onclick = run;
+
+// =====================================================================
+// مساعد إكسل: Claude بدور MaliAI (محاسب + خبير إكسل) بأدوات محدّدة على الملف
+// =====================================================================
+const EXCEL_SYSTEM = `You are MaliAI, the accountant's teammate working inside their open Excel workbook.
+You are a senior chartered accountant in Jordan (IFRS; Jordanian General Sales Tax, standard rate 16%) and an Excel expert with more than ten years of daily use who knows every corner of Excel: formulas (XLOOKUP, SUMIFS, INDEX/MATCH, LET, LAMBDA, dynamic arrays), tables, pivot tables, charts, conditional formatting, data validation, named ranges and clean professional layouts. You can build complex workbooks from scratch and safely modify existing ones.
+
+How you work:
+- Talk to the accountant in short, friendly Jordanian Arabic. When a request is ambiguous or a choice changes the numbers, ask one short question; otherwise act.
+- Look before you change anything: use workbook_overview and read_range first. Never assume a layout or a column.
+- Prefer live formulas over typed results so the workbook stays right when data changes. Write formulas with English function names and comma separators. Quote sheet names in references, e.g. ='الفواتير'!I2.
+- Check every number you produce. write_range returns the computed values and any error cells: fix every #REF!, #VALUE!, #DIV/0!, #NAME?, #N/A, #SPILL!. Then cross-check totals a second, independent way (for example, the grand total of a summary equals the SUM of the source column) and tell the accountant what you checked and whether it matched.
+- Never delete, clear or overwrite existing data without the accountant's explicit yes in this conversation; only then pass overwrite or confirmed.
+- Work in blocks: write headers and all formulas of a table in one write_range call, not cell by cell.
+- The invoice tab of this add-in fills the sheets «الفواتير» (one row per invoice) and «البنود» (one row per line item); reuse them when the accountant asks about invoices.
+- When you finish, say in one to three lines what you built, where (sheet and range), and what you verified.`;
+
+const MAX_CELLS = 4000;   // حدّ القراءة بالنداء الواحد
+const MAX_STEPS = 30;     // ponytail: حدّ خطوات الطلب الواحد، زيده إذا الطلبات الكبيرة بتوقف قبل ما تخلص
+const TOOLS = [
+  { name: "workbook_overview", description: "List every sheet with its used range and header row, all tables, the active sheet and the current selection. Call it first when you don't know the workbook yet.",
+    input_schema: { type: "object", properties: {} } },
+  { name: "read_range", description: `Read values, formulas and number formats of a range (max ${MAX_CELLS} cells per call; read big sheets in parts).`,
+    input_schema: { type: "object", properties: { sheet: { type: "string", description: "Sheet name; omit for the active sheet" }, address: { type: "string", description: "A1 range, e.g. A1:F40" } }, required: ["address"] } },
+  { name: "write_range", description: "Write a 2D block whose top-left cell is the top-left of address. Strings starting with = are formulas. Returns the computed values and any error cells so you can verify them. Refuses to overwrite non-empty cells unless overwrite is true.",
+    input_schema: { type: "object", properties: {
+      sheet: { type: "string" }, address: { type: "string", description: "Top-left cell or full range" },
+      cells: { type: "array", items: { type: "array", items: { type: ["string", "number", "boolean", "null"] } }, description: "Rows of values or formulas" },
+      number_format: { type: "string", description: "Optional number format for the whole block, e.g. #,##0.000" },
+      overwrite: { type: "boolean", description: "true only after the accountant agreed to replace existing data" } }, required: ["address", "cells"] } },
+  { name: "format_range", description: "Format a range. Colors are hex like #107C41. column_width is in points or \"auto\".",
+    input_schema: { type: "object", properties: {
+      sheet: { type: "string" }, address: { type: "string" }, bold: { type: "boolean" }, italic: { type: "boolean" }, font_size: { type: "number" },
+      font_color: { type: "string" }, fill: { type: "string" }, number_format: { type: "string" },
+      h_align: { type: "string", enum: ["Left", "Center", "Right"] }, wrap: { type: "boolean" }, borders: { type: "boolean" },
+      column_width: { type: ["number", "string"] }, merge: { type: "boolean" } }, required: ["address"] } },
+  { name: "add_sheet", description: "Add a new worksheet.",
+    input_schema: { type: "object", properties: { name: { type: "string" }, activate: { type: "boolean" } }, required: ["name"] } },
+  { name: "create_table", description: "Turn a range with a header row into an Excel table.",
+    input_schema: { type: "object", properties: { sheet: { type: "string" }, address: { type: "string" }, name: { type: "string" }, style: { type: "string", description: "e.g. TableStyleMedium2" } }, required: ["address"] } },
+  { name: "add_chart", description: "Add a chart from a source range. type is an Excel chart type such as ColumnClustered, BarClustered, Line, Pie, Doughnut, Area, XYScatter.",
+    input_schema: { type: "object", properties: { sheet: { type: "string" }, source: { type: "string" }, type: { type: "string" }, title: { type: "string" }, anchor: { type: "string", description: "Top-left cell where the chart goes" } }, required: ["source", "type"] } },
+  { name: "conditional_format", description: "Add conditional formatting. rule: cell_value (with operator, value1, value2), formula (custom formula, relative to the range's top-left cell), duplicates, color_scale, data_bar.",
+    input_schema: { type: "object", properties: {
+      sheet: { type: "string" }, address: { type: "string" }, rule: { type: "string", enum: ["cell_value", "formula", "duplicates", "color_scale", "data_bar"] },
+      operator: { type: "string", enum: ["GreaterThan", "LessThan", "EqualTo", "NotEqualTo", "Between", "GreaterThanOrEqual", "LessThanOrEqual"] },
+      value1: { type: ["string", "number"] }, value2: { type: ["string", "number"] }, formula: { type: "string" },
+      fill: { type: "string" }, font_color: { type: "string" } }, required: ["address", "rule"] } },
+  { name: "data_validation", description: "Restrict what can be typed in a range: a drop-down list, whole numbers, decimals or dates between min and max.",
+    input_schema: { type: "object", properties: {
+      sheet: { type: "string" }, address: { type: "string" }, type: { type: "string", enum: ["list", "wholeNumber", "decimal", "date"] },
+      list: { type: "string", description: "Comma-separated items, or a range reference like =$A$2:$A$20" }, min: { type: ["string", "number"] }, max: { type: ["string", "number"] } }, required: ["address", "type"] } },
+  { name: "freeze_panes", description: "Freeze the top rows and/or left columns of a sheet (0 and 0 unfreezes).",
+    input_schema: { type: "object", properties: { sheet: { type: "string" }, rows: { type: "integer" }, columns: { type: "integer" } } } },
+  { name: "sort_range", description: "Sort a range by one column (column_index is 0-based inside the range).",
+    input_schema: { type: "object", properties: { sheet: { type: "string" }, address: { type: "string" }, column_index: { type: "integer" }, ascending: { type: "boolean" }, has_headers: { type: "boolean" } }, required: ["address", "column_index"] } },
+  { name: "change_structure", description: "Insert or delete whole rows or columns through a range, clear a range's contents, or delete a sheet. Destructive: confirmed must be true, which you may only set after the accountant said yes.",
+    input_schema: { type: "object", properties: {
+      sheet: { type: "string" }, address: { type: "string" },
+      action: { type: "string", enum: ["insert_rows", "insert_columns", "delete_rows", "delete_columns", "clear_contents", "delete_sheet"] },
+      confirmed: { type: "boolean" } }, required: ["action"] } },
+  { name: "create_pivot", description: "Create a pivot table from a source range with a header row.",
+    input_schema: { type: "object", properties: {
+      name: { type: "string" }, source_sheet: { type: "string" }, source_address: { type: "string" }, dest_sheet: { type: "string" }, dest_cell: { type: "string" },
+      rows: { type: "array", items: { type: "string" } }, columns: { type: "array", items: { type: "string" } },
+      values: { type: "array", items: { type: "object", properties: { field: { type: "string" }, summarize: { type: "string", enum: ["Sum", "Count", "Average", "Max", "Min"] } }, required: ["field"] } } },
+      required: ["name", "source_sheet", "source_address", "dest_sheet", "dest_cell", "rows", "values"] } },
+  { name: "define_name", description: "Create a workbook-level named range.",
+    input_schema: { type: "object", properties: { name: { type: "string" }, sheet: { type: "string" }, address: { type: "string" } }, required: ["name", "address"] } }
+];
+
+const ws = (ctx, name) => name ? ctx.workbook.worksheets.getItem(name) : ctx.workbook.worksheets.getActiveWorksheet();
+const grid2 = (rows, cols, v) => Array.from({ length: rows }, () => Array(cols).fill(v));
+const STEP_LABEL = {
+  workbook_overview: () => "بتعرّف على الملف", read_range: a => `بقرأ ${a.address}${a.sheet ? " من «" + a.sheet + "»" : ""}`,
+  write_range: a => `بكتب على ${a.address}${a.sheet ? " بـ«" + a.sheet + "»" : ""}`, format_range: a => `بنسّق ${a.address}`,
+  add_sheet: a => `بضيف شيت «${a.name}»`, create_table: a => `بعمل جدول ${a.address}`, add_chart: a => `بعمل رسم من ${a.source}`,
+  conditional_format: a => `تنسيق شرطي على ${a.address}`, data_validation: a => `تحقّق إدخال على ${a.address}`,
+  freeze_panes: () => "بثبّت العناوين", sort_range: a => `بفرز ${a.address}`,
+  change_structure: a => ({ insert_rows: "بضيف صفوف", insert_columns: "بضيف أعمدة", delete_rows: "بحذف صفوف", delete_columns: "بحذف أعمدة",
+    clear_contents: "بفضّي", delete_sheet: "بحذف الشيت" }[a.action] || a.action) + " " + (a.address || a.sheet || "") + (a.confirmed ? "" : " (بستنّى موافقتك)"),
+  create_pivot: a => `بعمل Pivot «${a.name}»`, define_name: a => `باسم النطاق ${a.name}`
+};
+
+const HANDLERS = {
+  workbook_overview: () => Excel.run(async ctx => {
+    const sheets = ctx.workbook.worksheets; sheets.load("items/name");
+    const active = sheets.getActiveWorksheet(); active.load("name");
+    const sel = ctx.workbook.getSelectedRange(); sel.load("address");
+    const tables = ctx.workbook.tables; tables.load("items/name");
+    await ctx.sync();
+    const used = sheets.items.map(s => { const u = s.getUsedRangeOrNullObject(true); u.load("address,rowCount,columnCount"); return u; });
+    const tRanges = tables.items.map(t => { const r = t.getRange(); r.load("address"); return r; });
+    await ctx.sync();
+    const heads = used.map(u => { if (u.isNullObject) return null; const h = u.getRow(0); h.load("values"); return h; });
+    await ctx.sync();
+    return { active_sheet: active.name, selection: sel.address,
+      sheets: sheets.items.map((s, i) => used[i].isNullObject ? { name: s.name, empty: true }
+        : { name: s.name, used: used[i].address, rows: used[i].rowCount, columns: used[i].columnCount, header: heads[i].values[0].slice(0, 40) }),
+      tables: tables.items.map((t, i) => ({ name: t.name, address: tRanges[i].address })) };
+  }),
+
+  read_range: ({ sheet, address }) => Excel.run(async ctx => {
+    const r = ws(ctx, sheet).getRange(address); r.load("address,rowCount,columnCount"); await ctx.sync();
+    if (r.rowCount * r.columnCount > MAX_CELLS) throw new Error(`${r.address} has ${r.rowCount * r.columnCount} cells; read at most ${MAX_CELLS} per call`);
+    r.load("values,formulas,numberFormat"); await ctx.sync();
+    return { address: r.address, values: r.values, formulas: r.formulas, number_formats: r.numberFormat };
+  }),
+
+  write_range: ({ sheet, address, cells, number_format, overwrite }) => {
+    if (!Array.isArray(cells) || !cells.length || !cells.every(Array.isArray)) throw new Error("cells must be a non-empty 2D array");
+    const cols = Math.max(...cells.map(r => r.length));
+    if (!cols) throw new Error("cells rows are empty");
+    const data = cells.map(r => Array.from({ length: cols }, (_, j) => r[j] == null ? "" : r[j]));
+    return Excel.run(async ctx => {
+      const r = ws(ctx, sheet).getRange(address).getCell(0, 0).getResizedRange(data.length - 1, cols - 1);
+      r.load("address,formulas"); await ctx.sync();
+      if (!overwrite) {
+        const filled = r.formulas.flat().filter(v => v !== "").length;
+        if (filled) throw new Error(`${r.address} already has ${filled} non-empty cells. Ask the accountant before replacing them, then call again with overwrite: true.`);
+      }
+      r.formulas = data;
+      if (number_format) r.numberFormat = grid2(data.length, cols, number_format);
+      r.load("values"); await ctx.sync();
+      const errors = [];
+      r.values.forEach((row, i) => row.forEach((v, j) => { if (typeof v === "string" && /^#[A-Z/0!?]+/.test(v) && errors.length < 50) errors.push({ row: i, column: j, error: v }); }));
+      return { written: r.address, errors, values: data.length * cols <= 600 ? r.values : r.values.slice(0, 30) };
+    });
+  },
+
+  format_range: (a) => Excel.run(async ctx => {
+    const r = ws(ctx, a.sheet).getRange(a.address); r.load("rowCount,columnCount"); await ctx.sync();
+    const f = r.format;
+    if (a.bold != null) f.font.bold = a.bold;
+    if (a.italic != null) f.font.italic = a.italic;
+    if (a.font_size) f.font.size = a.font_size;
+    if (a.font_color) f.font.color = a.font_color;
+    if (a.fill) f.fill.color = a.fill;
+    if (a.number_format) r.numberFormat = grid2(r.rowCount, r.columnCount, a.number_format);
+    if (a.h_align) f.horizontalAlignment = a.h_align;
+    if (a.wrap != null) f.wrapText = a.wrap;
+    if (a.borders) {
+      const edges = ["EdgeTop", "EdgeBottom", "EdgeLeft", "EdgeRight"];
+      if (r.rowCount > 1) edges.push("InsideHorizontal");
+      if (r.columnCount > 1) edges.push("InsideVertical");
+      edges.forEach(e => { f.borders.getItem(e).style = "Continuous"; });
+    }
+    if (a.column_width === "auto") f.autofitColumns(); else if (a.column_width) f.columnWidth = Number(a.column_width);
+    if (a.merge) r.merge(false);
+    await ctx.sync();
+    return { formatted: a.address };
+  }),
+
+  add_sheet: ({ name, activate }) => Excel.run(async ctx => {
+    const s = ctx.workbook.worksheets.add(name);
+    if (activate) s.activate();
+    await ctx.sync();
+    return { added: name };
+  }),
+
+  create_table: ({ sheet, address, name, style }) => Excel.run(async ctx => {
+    const t = ws(ctx, sheet).tables.add(address, true);
+    if (name) t.name = name;
+    if (style) t.style = style;
+    t.load("name"); await ctx.sync();
+    return { table: t.name };
+  }),
+
+  add_chart: ({ sheet, source, type, title, anchor }) => Excel.run(async ctx => {
+    const s = ws(ctx, sheet);
+    const ch = s.charts.add(type, s.getRange(source), "Auto");
+    if (title) ch.title.text = title;
+    if (anchor) ch.setPosition(anchor);
+    ch.load("name"); await ctx.sync();
+    return { chart: ch.name };
+  }),
+
+  conditional_format: (a) => Excel.run(async ctx => {
+    const cfs = ws(ctx, a.sheet).getRange(a.address).conditionalFormats;
+    const paint = fmt => { if (a.fill) fmt.fill.color = a.fill; if (a.font_color) fmt.font.color = a.font_color; };
+    if (a.rule === "color_scale") {
+      cfs.add("ColorScale").colorScale.criteria = {
+        minimum: { formula: null, type: "LowestValue", color: "#F8696B" }, maximum: { formula: null, type: "HighestValue", color: "#63BE7B" } };
+    } else if (a.rule === "data_bar") {
+      cfs.add("DataBar");
+    } else if (a.rule === "duplicates") {
+      const p = cfs.add("PresetCriteria").preset;
+      p.rule = { criterion: "DuplicateValues" };
+      if (!a.fill && !a.font_color) a.fill = "#FFC7CE";
+      paint(p.format);
+    } else if (a.rule === "formula") {
+      const c = cfs.add("Custom").custom;
+      c.rule.formula = a.formula;
+      paint(c.format);
+    } else {
+      const c = cfs.add("CellValue").cellValue;
+      c.rule = { formula1: String(a.value1), ...(a.value2 != null ? { formula2: String(a.value2) } : {}), operator: a.operator || "GreaterThan" };
+      paint(c.format);
+    }
+    await ctx.sync();
+    return { added: a.rule, address: a.address };
+  }),
+
+  data_validation: ({ sheet, address, type, list, min, max }) => Excel.run(async ctx => {
+    const dv = ws(ctx, sheet).getRange(address).dataValidation;
+    dv.clear();
+    dv.rule = type === "list"
+      ? { list: { inCellDropDown: true, source: list } }
+      : { [type]: { formula1: min, ...(max != null ? { formula2: max, operator: "Between" } : { operator: "GreaterThanOrEqualTo" }) } };
+    await ctx.sync();
+    return { validated: address };
+  }),
+
+  freeze_panes: ({ sheet, rows = 0, columns = 0 }) => Excel.run(async ctx => {
+    const fp = ws(ctx, sheet).freezePanes;
+    fp.unfreeze();
+    if (rows && columns) fp.freezeAt(ws(ctx, sheet).getRangeByIndexes(0, 0, rows, columns));
+    else if (rows) fp.freezeRows(rows);
+    else if (columns) fp.freezeColumns(columns);
+    await ctx.sync();
+    return { frozen: { rows, columns } };
+  }),
+
+  sort_range: ({ sheet, address, column_index, ascending = true, has_headers = true }) => Excel.run(async ctx => {
+    ws(ctx, sheet).getRange(address).sort.apply([{ key: column_index, ascending }], false, has_headers);
+    await ctx.sync();
+    return { sorted: address };
+  }),
+
+  change_structure: ({ sheet, address, action, confirmed }) => {
+    if (!confirmed) throw new Error("Destructive change: ask the accountant first, then call again with confirmed: true.");
+    return Excel.run(async ctx => {
+      const s = ws(ctx, sheet);
+      if (action === "delete_sheet") s.delete();
+      else {
+        if (!address) throw new Error("address is required for " + action);
+        const r = s.getRange(address);
+        ({ insert_rows: () => r.getEntireRow().insert("Down"), insert_columns: () => r.getEntireColumn().insert("Right"),
+           delete_rows: () => r.getEntireRow().delete("Up"), delete_columns: () => r.getEntireColumn().delete("Left"),
+           clear_contents: () => r.clear("Contents") })[action]();
+      }
+      await ctx.sync();
+      return { done: action };
+    });
+  },
+
+  create_pivot: ({ name, source_sheet, source_address, dest_sheet, dest_cell, rows, columns = [], values }) => Excel.run(async ctx => {
+    const src = ctx.workbook.worksheets.getItem(source_sheet).getRange(source_address);
+    const pt = ctx.workbook.pivotTables.add(name, src, ws(ctx, dest_sheet).getRange(dest_cell));
+    rows.forEach(f => pt.rowHierarchies.add(pt.hierarchies.getItem(f)));
+    columns.forEach(f => pt.columnHierarchies.add(pt.hierarchies.getItem(f)));
+    values.forEach(v => { const d = pt.dataHierarchies.add(pt.hierarchies.getItem(v.field)); if (v.summarize) d.summarizeBy = v.summarize; });
+    await ctx.sync();
+    return { pivot: name };
+  }),
+
+  define_name: ({ name, sheet, address }) => Excel.run(async ctx => {
+    ctx.workbook.names.add(name, ws(ctx, sheet).getRange(address));
+    await ctx.sync();
+    return { named: name };
+  })
+};
+
+// ---------- المحادثة ----------
+let CHAT = [];          // سجلّ المحادثة كامل: بينضاف عليه بس، ما بنعدّل اللي قبل
+let stopAsked = false;
+function say(cls, text) {
+  const d = document.createElement("div");
+  d.className = "msg " + cls; d.textContent = text;
+  $("chat").append(d); d.scrollIntoView({ block: "end" });
+  return d;
+}
+async function selectionNote() {
+  if (!inExcel) return "";
+  try {
+    return await Excel.run(async ctx => {
+      const s = ctx.workbook.worksheets.getActiveWorksheet(); s.load("name");
+      const r = ctx.workbook.getSelectedRange(); r.load("address");
+      await ctx.sync();
+      return `\n\n[Excel now: active sheet «${s.name}», selection ${r.address}]`;
+    });
+  } catch (e) { return ""; }
+}
+
+async function chatSend() {
+  const text = $("ask").value.trim();
+  if (!text) return;
+  const c = readCfg();
+  if (c.provider !== "anthropic" || !c.key) { $("settings").open = true; say("err", "مساعد إكسل بيشتغل مع Claude: اختار Anthropic من الإعدادات وحط المفتاح."); return; }
+  if (!inExcel) say("err", "الصفحة مش داخل إكسل، فالأدوات ما رح تقدر توصل للملف.");
+  $("ask").value = ""; say("me", text);
+  $("send").disabled = true; $("stop").hidden = false; stopAsked = false;
+  const fb = /^claude-(opus-5|fable-5|sonnet-5-5)/.test(c.model) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" } : {};
+  // إذا الدور اللي قبل وقف (خطأ أو «وقّف») بعد نتائج أدوات ما انبعتت، الكلام الجديد بينضمّ لنفس رسالة المستخدم
+  const note = { type: "text", text: text + await selectionNote() };
+  const last = CHAT[CHAT.length - 1];
+  if (last && last.role === "user") last.content.push(note); else CHAT.push({ role: "user", content: [note] });
+  let Anthropic = null;
+  try {
+    ({ default: Anthropic } = await import(ANTHROPIC_SDK));
+    const client = new Anthropic({ apiKey: c.key, baseURL: c.url || undefined, dangerouslyAllowBrowser: true });
+    for (let step = 1; ; step++) {
+      if (stopAsked) { say("step", "وقّفت بطلبك."); break; }
+      if (step > MAX_STEPS) { say("err", `وصلت ${MAX_STEPS} خطوة ولسّا ما خلّصت — قلّي «كمّل» إذا بدّك أكمّل.`); break; }
+      $("cstatus").textContent = "بفكّر…";
+      const msg = await client.beta.messages.create({
+        model: c.model, max_tokens: 16000, ...fb,
+        output_config: { effort: "medium" },
+        cache_control: { type: "ephemeral" },
+        system: EXCEL_SYSTEM, tools: TOOLS, messages: CHAT
+      });
+      CHAT.push({ role: "assistant", content: msg.content });
+      for (const b of msg.content) if (b.type === "text" && b.text.trim()) say("ai", b.text.trim());
+      if (msg.stop_reason === "refusal") { say("err", "Claude رفض هالطلب."); break; }
+      if (msg.stop_reason === "pause_turn") continue;
+      if (msg.stop_reason !== "tool_use") break;
+      const results = [];
+      for (const b of msg.content.filter(b => b.type === "tool_use")) {
+        const label = STEP_LABEL[b.name] ? STEP_LABEL[b.name](b.input || {}) : b.name;
+        const line = say("step", "• " + label + "…");
+        try {
+          if (!HANDLERS[b.name]) throw new Error("unknown tool " + b.name);
+          const out = await HANDLERS[b.name](b.input || {});
+          results.push({ type: "tool_result", tool_use_id: b.id, content: JSON.stringify(out) });
+          line.textContent = "✓ " + label + (out.errors && out.errors.length ? ` (${out.errors.length} خطأ بالمعادلات، بصلّحهم)` : "");
+        } catch (e) {
+          results.push({ type: "tool_result", tool_use_id: b.id, content: String((e && (e.debugInfo && e.debugInfo.message || e.message)) || e), is_error: true });
+          line.textContent = "✗ " + label;
+        }
+      }
+      CHAT.push({ role: "user", content: results });
+    }
+  } catch (e) {
+    let m = e && e.message || String(e);
+    if (!Anthropic) m = "ما قدرت أحمّل مكتبة Claude — تأكّد من النت";
+    else if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) m = "المفتاح مرفوض — صلّحه من الإعدادات";
+    else if (e instanceof Anthropic.NotFoundError) m = "اسم النموذج غلط — صلّحه من الإعدادات";
+    else if (e instanceof Anthropic.RateLimitError) m = "وصلت حدّ Anthropic، استنّى دقيقة وجرّب";
+    say("err", m);
+  }
+  $("cstatus").textContent = ""; $("send").disabled = false; $("stop").hidden = true;
+}
+$("send").onclick = chatSend;
+$("ask").onkeydown = e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) chatSend(); };
+$("stop").onclick = () => { stopAsked = true; $("cstatus").textContent = "بوقّف بعد هالخطوة…"; };
+$("newchat").onclick = () => { CHAT = []; $("chat").innerHTML = ""; $("cstatus").textContent = ""; };
+
+function showTab(chat) {
+  $("tab-chat").hidden = !chat; $("tab-inv").hidden = chat;
+  $("t-chat").setAttribute("aria-selected", chat); $("t-inv").setAttribute("aria-selected", !chat);
+  if (chat) $("ask").focus();
+}
+$("t-inv").onclick = () => showTab(false);
+$("t-chat").onclick = () => showTab(true);
 
 fillCfg();
 Office.onReady(info => { inExcel = info.host === Office.HostType.Excel; });
