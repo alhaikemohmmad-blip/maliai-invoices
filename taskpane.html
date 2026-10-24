@@ -29,7 +29,7 @@ button{ font:inherit; border-radius:8px; cursor:pointer; }
 #go{ width:100%; padding:10px; border:0; background:var(--accent); color:#fff; font-weight:600; }
 #go:hover{ background:var(--accent2); }
 #go:disabled{ opacity:.5; cursor:default; }
-#clear, #save, #stopInv{ padding:4px 10px; border:1px solid var(--line); background:var(--bg2); color:var(--fg); }
+#clear, #save, #stopInv, #vexport, #vimport{ padding:4px 10px; border:1px solid var(--line); background:var(--bg2); color:var(--fg); }
 button:focus-visible, input:focus-visible, select:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
 #status{ min-height:1.5em; color:var(--fg2); }
 details{ margin-top:14px; border-top:1px solid var(--line); padding-top:8px; }
@@ -53,7 +53,7 @@ details small{ display:block; color:var(--fg2); margin:6px 0; }
 #stop, #newchat, #attach{ padding:8px 10px; border:1px solid var(--line); background:var(--bg2); color:var(--fg); }
 #tab-chat.over #ask{ border-color:var(--accent); }
 #chips{ font-size:12px; color:var(--fg2); margin-bottom:4px; }
-#chips button, #memList button{ padding:0 6px; border:0; background:none; color:var(--err); }
+#chips button, #vaultList button{ padding:0 6px; border:0; background:none; color:var(--err); }
 .msg.ai{ white-space:normal; }
 .msg.ai p{ margin:0 0 6px; }
 .msg.ai ul, .msg.ai ol{ margin:4px 0 6px; padding-inline-start:20px; }
@@ -61,9 +61,10 @@ details small{ display:block; color:var(--fg2); margin:6px 0; }
 .msg.ai table{ border-collapse:collapse; margin:6px 0; font-size:12px; display:block; max-width:100%; overflow-x:auto; }
 .msg.ai th, .msg.ai td{ border:1px solid var(--line); padding:3px 6px; text-align:start; }
 .msg.ai th{ background:var(--bg2); }
-.msg.ai code, #memList code{ background:var(--bg2); padding:0 3px; border-radius:4px; direction:ltr; unicode-bidi:isolate; }
-#mem{ margin-top:10px; }
-#memList{ padding-inline-start:18px; font-size:12px; color:var(--fg2); }
+.msg.ai code{ background:var(--bg2); padding:0 3px; border-radius:4px; direction:ltr; unicode-bidi:isolate; }
+#vault{ margin-top:10px; }
+#vaultList{ padding-inline-start:18px; font-size:12px; color:var(--fg2); }
+#vaultList li.h{ list-style:none; margin:6px 0 2px; margin-inline-start:-18px; color:var(--fg); font-weight:600; }
 </style>
 </head>
 <body>
@@ -76,19 +77,24 @@ details small{ display:block; color:var(--fg2); margin:6px 0; }
 <section id="tab-chat" role="tabpanel" hidden>
   <div id="chat"></div>
   <div id="chips" hidden></div>
-  <textarea id="ask" rows="3" placeholder="مثلاً: فرّغ الفواتير المرفقة بشيت «المصاريف» تحت آخر صفّ، بنفس ترتيب أعمدته"></textarea>
+  <textarea id="ask" rows="3" placeholder="مثلاً: أرفق ملف إكسل أو PDF واسأل عنه، أو فرّغ الفواتير المرفقة بشيت «المصاريف» تحت آخر صفّ"></textarea>
   <input id="cfiles" type="file" multiple hidden>
   <div class="row">
-    <button id="attach" type="button" title="أرفق فواتير (أو اسحبها أو الصقها هون)">📎 أرفق</button>
+    <button id="attach" type="button" title="أرفق ملف إكسل أو PDF أو فواتير (أو اسحبها أو الصقها هون) — بينقرا مرّة وحدة وبينحفظ بالخزنة">📎 أرفق</button>
     <button id="send" type="button">ابعت</button>
     <button id="stop" type="button" hidden>وقّف</button>
     <button id="newchat" type="button">محادثة جديدة</button>
   </div>
   <p id="cstatus" role="status" aria-live="polite"></p>
-  <details id="mem">
-    <summary>🧠 ذاكرة MaliAI (<span id="memN">0</span>)</summary>
-    <ul id="memList"></ul>
-    <small>بيحفظ لحاله الأشياء المهمّة عن الشركة وطريقة شغلك، وبتضلّ بين المحادثات. اكبس ✕ لتمسح أيّ وحدة.</small>
+  <details id="vault">
+    <summary>🧠 خزنة MaliAI: ذاكرة ومسودات (<span id="vaultN">0</span>)</summary>
+    <ul id="vaultList"></ul>
+    <small>الذاكرة ملاحظات مرتّبة بصيغة Obsidian ومربوطة ببعض، وكل ملف بترفعه بينقرا مرّة وحدة وبينحفظ مسودة. الاثنين بيضلّوا بين المحادثات على هالجهاز، وMaliAI بيرجعلهم لحاله. اكبس ✕ لتمسح وحدة.</small>
+    <div class="row">
+      <button id="vexport" type="button">⬇ نزّلها لـ Obsidian</button>
+      <button id="vimport" type="button">⬆ استورد ملاحظات .md</button>
+    </div>
+    <input id="vfiles" type="file" accept=".md,text/markdown" multiple hidden>
   </details>
 </section>
 
@@ -133,7 +139,8 @@ const LIBS = {
   xlsx:    "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js",
   mammoth: "https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js",
   heic:    "https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js",
-  utif:    "https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.js"
+  utif:    "https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.js",
+  jszip:   "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
 };
 const ANTHROPIC_SDK = "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.131.0/+esm";
 
@@ -230,21 +237,25 @@ function shrink(src, w, h) {   // src: صورة أو canvas بحجمها الأ�
   g.drawImage(src, 0, 0, c.width, c.height);
   return c.toDataURL("image/jpeg", 0.85);
 }
+const isPdf = (file, ext) => file.type === "application/pdf" || ext === "pdf";
+async function openPdf(file) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  return pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+}
+async function pdfPageImage(pdf, n) {
+  const page = await pdf.getPage(n);
+  const v1 = page.getViewport({ scale: 1 });
+  const vp = page.getViewport({ scale: MAX_SIDE / Math.max(v1.width, v1.height) });
+  const [c, g] = canvasFor(vp.width, vp.height);
+  // intent "print": الرسم ما بيستنّى requestAnimationFrame، اللي بيوقف إذا اللوحة مخفيّة
+  await page.render({ canvasContext: g, viewport: vp, intent: "print" }).promise;
+  return c.toDataURL("image/jpeg", 0.85);
+}
 async function toParts(file) {
   const ext = (file.name || "").toLowerCase().split(".").pop();
-  if (file.type === "application/pdf" || ext === "pdf") {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
-    const images = [];
-    for (let n = 1; n <= Math.min(pdf.numPages, MAX_PAGES); n++) {
-      const page = await pdf.getPage(n);
-      const v1 = page.getViewport({ scale: 1 });
-      const vp = page.getViewport({ scale: MAX_SIDE / Math.max(v1.width, v1.height) });
-      const [c, g] = canvasFor(vp.width, vp.height);
-      // intent "print": الرسم ما بيستنّى requestAnimationFrame، اللي بيوقف إذا اللوحة مخفيّة
-      await page.render({ canvasContext: g, viewport: vp, intent: "print" }).promise;
-      images.push(c.toDataURL("image/jpeg", 0.85));
-    }
+  if (isPdf(file, ext)) {
+    const pdf = await openPdf(file), images = [];
+    for (let n = 1; n <= Math.min(pdf.numPages, MAX_PAGES); n++) images.push(await pdfPageImage(pdf, n));
     return { images };
   }
   if (/^(heic|heif)$/.test(ext) || /hei[cf]/.test(file.type)) {   // صور الآيفون
@@ -519,15 +530,18 @@ How you work:
 - Never delete, clear or overwrite existing data without the accountant's explicit yes in this conversation; only then pass overwrite or confirmed.
 - Work in blocks: write headers and all formulas of a table in one write_range call, not cell by cell.
 - The invoice tab of this add-in fills the sheets «الفواتير» (one row per invoice) and «البنود» (one row per line item); reuse them when the accountant asks about invoices.
-- When the accountant attaches invoices (each file arrives as a line with its name, then its page images or extracted text), book them the way they ask: first read the target sheet's header row and its last used row, map every field to those exact columns in that order, and append below the existing rows; never overwrite. If they don't say where, use «الفواتير» (${INV_HEAD.join(" | ")}) and «البنود» (${ITEM_HEAD.join(" | ")}), creating them with these headers if missing. Check every invoice (each line's quantity × unit price, the sum of lines, subtotal + tax = total, the 16% rate, the seller's tax number), read back what you wrote and confirm it matches the invoice, and list anything unclear instead of guessing.
+- Every file the accountant attaches (Excel, PDF, invoice photos) is read once and saved as a draft in your vault; it arrives with its draft path, in full when small or as a preview when big, and you read the rest from the vault. When the files are invoices, book them the way they ask: first read the target sheet's header row and its last used row, map every field to those exact columns in that order, and append below the existing rows; never overwrite. If they don't say where, use «الفواتير» (${INV_HEAD.join(" | ")}) and «البنود» (${ITEM_HEAD.join(" | ")}), creating them with these headers if missing. Check every invoice (each line's quantity × unit price, the sum of lines, subtotal + tax = total, the 16% rate, the seller's tax number), read back what you wrote and confirm it matches the invoice, and list anything unclear instead of guessing.
 - Arabic invoices, including handwritten ones: read Arabic-Indic (٠-٩) and Persian (۰-۹) digits, ٫ as the decimal separator and ٬ for thousands, and combine دينار and فلس columns as dinars + fils/1000.
 - Never state a number you have not read from the workbook or computed with a formula and read back. Before you report any total, verify it a second, independent way; if the two ways disagree, say so and investigate instead of picking one.
-- You have long-term memory that survives across conversations (listed at the end). When the accountant tells you, or you discover, something durable — company details, the chart of accounts, which vendor goes to which account, sheet layouts and where things go, a correction they made, how they like their reports — save it with remember, one short fact at a time. Use forget when a fact becomes wrong. Check your memory before asking something you may already know.
+- You have a long-term memory vault in Obsidian format that survives across conversations. Your memory is the Markdown notes under ذاكرة/: one note per topic (the company, the chart of accounts, an important vendor, a workbook and its layout, the accountant's preferences, recurring corrections), linked to each other with [[note name]] links and #tags. Files the accountant uploaded are kept under مسودات/ as read-only drafts: read the draft instead of asking for the file again. The vault index, and small notes in full, come at the start of each conversation.
+- Use the vault before asking something you may already know, and read only what you need: vault_search for a name, number or word, then vault_read on the lines around it. When the accountant tells you, or you discover, something durable (company details, which vendor goes to which account, where things go in a sheet, a correction they made, how they like their reports), append it to the right note or create a new one and link it from related notes. Replace or delete notes that become wrong. Never store keys, passwords or private data unrelated to the work.
 - Organize every reply so it is easy to scan: the answer in one line first, then short bullet points or a small table; bold the key numbers; no long paragraphs. Use only this Markdown: **bold**, - bullets, 1. numbered steps, #### short headings, | tables |, and \`code\` for formulas.
 - When you finish, say in one to three lines what you built, where (sheet and range), and what you verified.`;
 
 const MAX_CELLS = 4000;   // حدّ القراءة بالنداء الواحد
 const MAX_STEPS = 30;     // ponytail: حدّ خطوات الطلب الواحد، زيده إذا الطلبات الكبيرة بتوقف قبل ما تخلص
+const MAX_READ_LINES = 400, MAX_READ_CHARS = 30000;   // حدّ قراءة الخزنة بالنداء الواحد
+const MAX_HITS = 60;      // حدّ نتائج البحث بالخزنة
 const TOOLS = [
   { name: "workbook_overview", description: "List every sheet with its used range and header row, all tables, the active sheet and the current selection. Call it first when you don't know the workbook yet.",
     input_schema: { type: "object", properties: {} } },
@@ -578,11 +592,30 @@ const TOOLS = [
       required: ["name", "source_sheet", "source_address", "dest_sheet", "dest_cell", "rows", "values"] } },
   { name: "define_name", description: "Create a workbook-level named range.",
     input_schema: { type: "object", properties: { name: { type: "string" }, sheet: { type: "string" }, address: { type: "string" } }, required: ["name", "address"] } },
-  { name: "remember", description: "Save one short, durable fact to your long-term memory so you still know it in future conversations (company details, chart of accounts, which vendor maps to which account, sheet layouts and where things go, recurring corrections, the accountant's preferences). Never store keys, passwords or private data unrelated to the work.",
-    input_schema: { type: "object", properties: { fact: { type: "string", description: "One specific fact, in Arabic" } }, required: ["fact"] } },
-  { name: "forget", description: "Remove a fact from long-term memory by its id when it is wrong or out of date.",
-    input_schema: { type: "object", properties: { id: { type: "integer" } }, required: ["id"] } }
+  { name: "vault_search", description: `Search your vault (memory notes and file drafts) for a name, number or word; several words must all appear on the same line. Arabic letter forms and Arabic-Indic digits match their plain forms. Returns up to ${MAX_HITS} matching lines grouped by note with their line numbers; for Excel drafts each group also gives the sheet and its header row.`,
+    input_schema: { type: "object", properties: {
+      query: { type: "string" }, folder: { type: "string", enum: ["ذاكرة", "مسودات"], description: "Optional: search one folder only" } }, required: ["query"] } },
+  { name: "vault_read", description: `Read a note or draft from your vault, whole or a range of lines (at most ${MAX_READ_LINES} lines per call; continue from next_from). Also returns the note's [[links]] and the notes that link to it.`,
+    input_schema: { type: "object", properties: {
+      path: { type: "string", description: "e.g. ذاكرة/الشركة.md or مسودات/كشف البنك.xlsx.md" }, from_line: { type: "integer" }, lines: { type: "integer" } }, required: ["path"] } },
+  { name: "vault_write", description: "Create or update one of your memory notes under ذاكرة/ (Markdown; link related notes with [[note name]]). mode: create (fails if the note exists), append (adds to its end), replace (rewrites it). Drafts under مسودات/ are read-only.",
+    input_schema: { type: "object", properties: {
+      path: { type: "string", description: "e.g. ذاكرة/الموردين.md" }, content: { type: "string" }, mode: { type: "string", enum: ["create", "append", "replace"] } }, required: ["path", "content", "mode"] } },
+  { name: "vault_delete", description: "Delete one of your memory notes under ذاكرة/ that is wrong or no longer needed.",
+    input_schema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } }
 ];
+
+// شكل طلب المحادثة ثابت بالزبط عشان الكاش: الأدوات والتعليمات ما بتتغيّر أبداً (بينكاشوا ساعة وبيخدموا كل المحادثات)،
+// الخزنة بتنحطّ بأوّل رسالة بالمحادثة مش بالتعليمات، وآخر السجلّ بينكاش لحاله مع كل نداء
+const chatParams = (c, messages) => ({
+  model: c.model, max_tokens: 16000,
+  // fallbacks بيشتغل على هالنماذج بس (Haiku ما بيدعمه)
+  ...(/^claude-(opus-5|fable-5|sonnet-5-5)/.test(c.model) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" } : {}),
+  output_config: { effort: "medium" },
+  cache_control: { type: "ephemeral" },
+  system: [{ type: "text", text: EXCEL_SYSTEM, cache_control: { type: "ephemeral", ttl: "1h" } }],
+  tools: TOOLS, messages
+});
 
 const ws = (ctx, name) => name ? ctx.workbook.worksheets.getItem(name) : ctx.workbook.worksheets.getActiveWorksheet();
 const grid2 = (rows, cols, v) => Array.from({ length: rows }, () => Array(cols).fill(v));
@@ -595,7 +628,8 @@ const STEP_LABEL = {
   change_structure: a => ({ insert_rows: "بضيف صفوف", insert_columns: "بضيف أعمدة", delete_rows: "بحذف صفوف", delete_columns: "بحذف أعمدة",
     clear_contents: "بفضّي", delete_sheet: "بحذف الشيت" }[a.action] || a.action) + " " + (a.address || a.sheet || "") + (a.confirmed ? "" : " (بستنّى موافقتك)"),
   create_pivot: a => `بعمل Pivot «${a.name}»`, define_name: a => `باسم النطاق ${a.name}`,
-  remember: a => `🧠 حفظت: ${a.fact}`, forget: a => `🧠 نسيت رقم ${a.id}`
+  vault_search: a => `🧠 بدوّر بالخزنة عن «${a.query}»`, vault_read: a => `🧠 بقرأ ${a.path}${a.from_line > 1 ? " من سطر " + a.from_line : ""}`,
+  vault_write: a => `🧠 ${a.mode === "append" ? "زدت على" : "حفظت"} ${a.path}`, vault_delete: a => `🧠 مسحت ${a.path}`
 };
 
 const HANDLERS = {
@@ -776,28 +810,21 @@ const HANDLERS = {
     return { named: name };
   }),
 
-  remember: ({ fact }) => {
-    fact = String(fact || "").trim().slice(0, 500);
-    if (!fact) throw new Error("fact is empty");
-    const m = readMem();
-    const same = m.find(f => f.fact === fact);
-    if (same) return { already_remembered: same.id };
-    const id = m.reduce((a, f) => Math.max(a, f.id), 0) + 1;
-    writeMem([...m, { id, fact, at: Date.now() }]);
-    return { remembered: id };
-  },
-
-  forget: ({ id }) => {
-    const m = readMem();
-    if (!m.some(f => f.id === id)) throw new Error("no memory with id " + id);
-    writeMem(m.filter(f => f.id !== id));
-    return { forgotten: id };
+  vault_search: ({ query, folder }) => searchVault(query, folder),
+  vault_read: readNote,
+  vault_write: writeNote,
+  vault_delete: async ({ path }) => {
+    const n = findNote(path);
+    if (!n.path.startsWith(MEM_DIR)) throw new Error("only your memory notes under ذاكرة/ can be deleted; the accountant removes drafts from the vault list");
+    await removeNote(n.path);
+    return { deleted: n.path };
   }
 };
 
 // ---------- المحادثة ----------
 let CHAT = [];          // سجلّ المحادثة كامل: بينضاف عليه بس، ما بنعدّل اللي قبل
 let UI = [];            // اللي معروض بالشاشة، بينحفظ مع المحادثة
+let ctxSent = false;    // فهرس الخزنة انبعت بأوّل رسالة بهالمحادثة؟
 let stopAsked = false, chatAbort = null;
 
 // Markdown بسيط وآمن لردود MaliAI: كل النصّ بيتعقّم أوّل، وبعدين عناوين ونقاط وجداول وخطّ عريض بس
@@ -850,39 +877,169 @@ const idb = (() => {
     const db = await open();
     return new Promise((ok, bad) => { const t = db.transaction("kv", mode), req = fn(t.objectStore("kv")); t.oncomplete = () => ok(req.result); t.onerror = () => bad(t.error); });
   };
-  return { get: k => tx("readonly", s => s.get(k)), set: (k, v) => tx("readwrite", s => s.put(v, k)) };
+  return { get: k => tx("readonly", s => s.get(k)), set: (k, v) => tx("readwrite", s => s.put(v, k)),
+    del: k => tx("readwrite", s => s.delete(k)),
+    all: prefix => tx("readonly", s => s.getAll(IDBKeyRange.bound(prefix, prefix + "￿"))) };
 })();
-const saveChat = () => idb.set("chat", { CHAT, UI }).catch(() => {});
+const saveChat = () => idb.set("chat", { CHAT, UI, ctxSent }).catch(() => {});
 async function loadChat() {
   try {
     const s = await idb.get("chat");
     if (!s || !Array.isArray(s.CHAT)) return;
-    CHAT = s.CHAT;
+    CHAT = s.CHAT; ctxSent = !!s.ctxSent;
     for (const it of s.UI || []) say(it.cls, it.text);
   } catch (e) {}
 }
 
-// ---------- ذاكرة MaliAI الدائمة (بين المحادثات) ----------
-const MEM_KEY = "maliai.memory";
-const MAX_MEM = 200;   // ponytail: أقدم الذكريات بتطلع لمّا نوصل 200
-const readMem = () => { try { return JSON.parse(localStorage.getItem(MEM_KEY)) || []; } catch (e) { return []; } };
-function writeMem(m) { try { localStorage.setItem(MEM_KEY, JSON.stringify(m.slice(-MAX_MEM))); } catch (e) {} renderMem(); }
-function renderMem() {
-  const m = readMem();
-  $("memN").textContent = m.length;
-  $("memList").innerHTML = "";
-  for (const f of m) {
-    const li = document.createElement("li"), x = document.createElement("button");
-    li.textContent = f.fact + " ";
-    x.type = "button"; x.textContent = "✕"; x.title = "امسح هاي من الذاكرة";
-    x.onclick = () => writeMem(readMem().filter(y => y.id !== f.id));
-    li.append(x); $("memList").append(li);
+// ---------- خزنة MaliAI بصيغة Obsidian: ذاكرة/ ملاحظاته، ومسودات/ الملفات اللي انقرت مرّة وحدة ----------
+const MEM_DIR = "ذاكرة/", DRAFT_DIR = "مسودات/";
+const VAULT = new Map();   // path → { path, text, at, + للمسودات: src, meta, hash }
+const INLINE_MEM = 6000;   // ponytail: ذاكرة أصغر من هيك بتنبعت كاملة بأوّل المحادثة، الأكبر فهرس بس وبيقرأ اللي بدّه
+const MAX_NOTE = 20000;    // ponytail: حدّ ملاحظة الذاكرة الوحدة، الأكبر بتنقسم لملاحظات مربوطة
+const title = p => p.split("/").pop().replace(/\.md$/i, "");
+const safeName = s => String(s).replace(/[\\/:*?"<>|#^[\]]/g, "-").trim() || "ملاحظة";   // أسماء بيقبلها Obsidian
+function cleanPath(p) {
+  let s = String(p || "").trim().replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!s || s.split("/").some(x => !x || x === "." || x === "..")) throw new Error("bad path: " + p);
+  return /\.md$/i.test(s) ? s : s + ".md";
+}
+function findNote(p) {
+  const s = cleanPath(p);
+  const n = VAULT.get(s) || VAULT.get(MEM_DIR + s) || VAULT.get(DRAFT_DIR + s) || [...VAULT.values()].find(n => title(n.path) === title(s));
+  if (!n) throw new Error(`${s} is not in the vault; use vault_search`);
+  return n;
+}
+async function putNote(n) {
+  n.at = Date.now();
+  await idb.set("note:" + n.path, n);
+  VAULT.set(n.path, n); renderVault();
+  return n;
+}
+async function removeNote(path) {
+  await idb.del("note:" + path);
+  VAULT.delete(path); renderVault();
+}
+async function loadVault() {
+  try { for (const n of await idb.all("note:")) VAULT.set(n.path, n); } catch (e) {}
+  // ذاكرة النسخة القديمة (حقائق قصيرة بـ localStorage) بتنتقل مرّة وحدة لملاحظة بالخزنة
+  try {
+    const old = JSON.parse(localStorage.getItem("maliai.memory")) || [];
+    if (old.length) {
+      const p = MEM_DIR + "ملاحظات عامّة.md", n = VAULT.get(p);
+      await putNote({ path: p, text: (n ? n.text : "# ملاحظات عامّة") + "\n" + old.map(f => "- " + f.fact).join("\n") });
+      localStorage.removeItem("maliai.memory");
+    }
+  } catch (e) {}
+  renderVault();
+}
+
+// بحث عربي مرن: أشكال الألف والياء والتاء المربوطة والتشكيل والأرقام الهندية بتطابق العاديّة
+const norm = s => String(s).normalize("NFKC").toLowerCase()
+  .replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/[۰-۹]/g, d => "۰۱۲۳۴۵۶۷۸۹".indexOf(d))
+  .replace(/[ً-ْـ]/g, "").replace(/[أإآ]/g, "ا").replace(/ى/g, "ي").replace(/ة/g, "ه");
+function searchVault(query, folder) {
+  const terms = norm(query || "").split(/\s+/).filter(Boolean);
+  if (!terms.length) throw new Error("query is empty");
+  const has = s => { const x = norm(s); return terms.every(t => x.includes(t)); };
+  const notes = [];
+  let count = 0;
+  for (const n of VAULT.values()) {
+    if (folder && !n.path.startsWith(folder + "/")) continue;
+    const lines = n.text.split("\n"), groups = [];
+    let sect = -1, g = null;
+    lines.forEach((l, i) => {
+      if (l.startsWith("## ")) sect = i;
+      if (count >= MAX_HITS || !has(l)) return;
+      if (!g || g.at !== sect) groups.push(g = { at: sect, section: sect >= 0 ? lines[sect] : undefined,
+        header: n.kind === "excel" && sect >= 0 && i !== sect + 1 ? lines[sect + 1] : undefined, hits: [] });
+      g.hits.push({ line: i + 1, text: l.length > 300 ? l.slice(0, 300) + "…" : l });
+      count++;
+    });
+    if (groups.length || has(title(n.path))) notes.push({ path: n.path, total_lines: lines.length, groups: groups.map(({ at, ...x }) => x) });
+  }
+  return { query, notes, ...(count >= MAX_HITS ? { more: "too many matches; search for something more specific" } : {}) };
+}
+function readNote({ path, from_line = 1, lines: want = MAX_READ_LINES }) {
+  const n = findNote(path), all = n.text.split("\n"), t = title(n.path);
+  const from = Math.min(Math.max(1, Math.floor(from_line) || 1), all.length);
+  let to = Math.min(all.length, from - 1 + Math.min(MAX_READ_LINES, Math.max(1, Math.floor(want) || MAX_READ_LINES)));
+  let text = all.slice(from - 1, to).join("\n");
+  while (text.length > MAX_READ_CHARS && to > from) { to = from + Math.floor((to - from) / 2); text = all.slice(from - 1, to).join("\n"); }
+  const links = [...new Set([...n.text.matchAll(/\[\[([^\]|#]+)/g)].map(m => m[1].trim()))];
+  const backlinks = [...VAULT.values()].filter(o => o !== n && ["]]", "|", "#"].some(e => o.text.includes("[[" + t + e))).map(o => o.path);
+  return { path: n.path, ...(n.src ? { file: n.src, about: n.meta } : {}), from_line: from, to_line: to, total_lines: all.length,
+    ...(to < all.length ? { next_from: to + 1 } : {}), text: text.slice(0, MAX_READ_CHARS),
+    ...(links.length ? { links } : {}), ...(backlinks.length ? { backlinks } : {}) };
+}
+async function writeNote({ path, content, mode }) {
+  let p = cleanPath(path);
+  if (p.startsWith(DRAFT_DIR)) throw new Error("drafts under مسودات/ are read-only; write your notes under ذاكرة/");
+  if (!p.startsWith(MEM_DIR)) p = MEM_DIR + p;
+  p = MEM_DIR + p.slice(MEM_DIR.length).split("/").map(safeName).join("/");
+  content = String(content || "").trim();
+  if (!content) throw new Error("content is empty");
+  const n = VAULT.get(p);
+  if (mode === "create" && n) throw new Error(`${p} already exists; use append or replace`);
+  const text = mode === "append" && n ? n.text.replace(/\s+$/, "") + "\n" + content : (/^#\s/.test(content) ? content : `# ${title(p)}\n${content}`);
+  if (text.length > MAX_NOTE) throw new Error(`${p} would be ${text.length} characters (max ${MAX_NOTE}); split it into linked notes`);
+  await putNote({ path: p, text });
+  return { saved: p, total_lines: text.split("\n").length };
+}
+
+// أوّل رسالة بكل محادثة: فهرس الخزنة (والذاكرة كاملة إذا صغيرة)، عشان التعليمات نفسها تضلّ ثابتة بالكاش
+const gist = n => (n.text.split("\n").find(l => l.trim() && !l.startsWith("#")) || "").trim().slice(0, 120);
+const draftLine = n => `- ${n.path} — ${n.meta}, ${n.text.split("\n").length} lines, ${day(n.at)}`;
+function vaultContext() {
+  const all = [...VAULT.values()].sort((a, b) => a.path.localeCompare(b.path, "ar"));
+  const mem = all.filter(n => n.path.startsWith(MEM_DIR)), drafts = all.filter(n => n.path.startsWith(DRAFT_DIR));
+  const memText = !mem.length ? "Your memory is empty so far."
+    : mem.reduce((a, n) => a + n.text.length, 0) <= INLINE_MEM ? "Your memory notes, in full:\n\n" + mem.map(n => `=== ${n.path}\n${n.text}`).join("\n\n")
+    : "Your memory notes (open them with vault_read):\n" + mem.map(n => `- ${n.path} — ${gist(n)}`).join("\n");
+  const draftText = drafts.length ? "Drafts of files uploaded earlier (read-only; vault_search / vault_read):\n" + drafts.map(draftLine).join("\n") : "No file drafts yet.";
+  return `[Your vault at the start of this conversation]\n${memText}\n\n${draftText}`;
+}
+
+function renderVault() {
+  const all = [...VAULT.values()].sort((a, b) => a.path.localeCompare(b.path, "ar"));
+  $("vaultN").textContent = all.length;
+  $("vaultList").innerHTML = "";
+  for (const [dir, label] of [[MEM_DIR, "🧠 ذاكرة"], [DRAFT_DIR, "📄 مسودات"]]) {
+    const items = all.filter(n => n.path.startsWith(dir));
+    if (!items.length) continue;
+    const h = document.createElement("li");
+    h.className = "h"; h.textContent = `${label} (${items.length})`;
+    $("vaultList").append(h);
+    for (const n of items) {
+      const li = document.createElement("li"), x = document.createElement("button");
+      li.textContent = title(n.path) + (n.meta ? " · " + n.meta : "") + " ";
+      li.title = n.text.slice(0, 400);
+      x.type = "button"; x.textContent = "✕"; x.title = "امسح من الخزنة";
+      x.onclick = () => removeNote(n.path).catch(() => {});
+      li.append(x); $("vaultList").append(li);
+    }
   }
 }
-const memoryBlock = () => {
-  const m = readMem();
-  return m.length ? "\n\nYour long-term memory about this accountant and company, from earlier conversations (rely on it; keep it current with remember and forget):\n" + m.map(f => `[${f.id}] ${f.fact}`).join("\n")
-    : "\n\nYour long-term memory is empty so far.";
+
+// Obsidian: الخزنة بتنزل zip بنفس المجلّدات، بتفكّه وبتفتحه بـ «Open folder as vault»؛ والملاحظات اللي بتعدّلها هناك بترجع بالاستيراد
+$("vexport").onclick = async () => {
+  try {
+    await lib("jszip");
+    const zip = new JSZip();
+    for (const n of VAULT.values()) zip.file("MaliAI/" + n.path, n.text);
+    const url = URL.createObjectURL(await zip.generateAsync({ type: "blob" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = "MaliAI-vault.zip"; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (e) { $("cstatus").textContent = "ما قدرت أنزّل الخزنة: " + (e.message || e); }
+};
+$("vimport").onclick = () => $("vfiles").click();
+$("vfiles").onchange = async e => {
+  const files = [...e.target.files];
+  e.target.value = "";
+  try {
+    for (const f of files) await putNote({ path: MEM_DIR + safeName(f.name.replace(/\.md$/i, "")) + ".md", text: (await f.text()).trim() });
+    $("cstatus").textContent = `انضافت ${files.length} ملاحظة لذاكرة MaliAI.`;
+  } catch (err) { $("cstatus").textContent = "ما قدرت أستورد: " + (err.message || err); }
 };
 async function selectionNote() {
   if (!inExcel) return "";
@@ -916,17 +1073,71 @@ chatTab.ondragover = e => { e.preventDefault(); chatTab.classList.add("over"); }
 chatTab.ondragleave = () => chatTab.classList.remove("over");
 chatTab.ondrop = e => { e.preventDefault(); chatTab.classList.remove("over"); attachFiles(e.dataTransfer.files); };
 
-// كل ملف ← سطر باسمه + صوره أو نصّه (نفس قرّاء تبويب التفريغ)
-async function attachmentBlocks(files) {
-  const parts = await Promise.all(files.map(f => toParts(f).catch(e => ({ error: e.message || String(e) }))));
-  const blocks = [], failed = [];
-  parts.forEach((p, i) => {
+// ---------- كل ملف بينقرا مرّة وحدة ← مسودة بالخزنة؛ نفس الملف مرّة ثانية (حتى بمحادثة جديدة) = نفس المسودة بدون ولا توكن ----------
+const MAX_DRAFT_PAGES = 60;   // ponytail: أوّل 60 صفحة من الـPDF، زيدها إذا في ملفات أطول
+const INLINE_DRAFT = 8000;    // مسودة أصغر من هيك بتنبعت كاملة مع الرسالة، الأكبر أوّل PREVIEW_LINES سطر والباقي بأدوات الخزنة
+const PREVIEW_LINES = 40;
+const OCR_PROMPT = `Transcribe this page into plain text exactly as printed, in reading order and in its original language.
+Keep every number, date, name and code exactly as written. Write each table row on one line with | between cells, keeping دينار and فلس columns as printed.
+Mark anything illegible with [؟]. No summary, translation, comments or added text.`;
+const ocr = (img, c, signal) => (c.provider === "anthropic" ? askClaude : askOpenAI)([img], OCR_PROMPT, c, signal);
+const nPages = n => n === 1 ? "صفحة وحدة" : n === 2 ? "صفحتين" : n <= 10 ? `${n} صفحات` : `${n} صفحة`;
+
+async function fileToDraft(file, c, signal) {
+  const name = file.name || "صورة ملصوقة", ext = name.toLowerCase().split(".").pop();
+  const pages = (list, label) => list.map((t, i) => `## ${label} ${i + 1}\n${t}`).join("\n\n");
+  if (/^(xlsx|xlsm|xlsb|xls|ods)$/.test(ext)) {   // إكسل: كل شيت CSV، بدون صفوف فاضية
+    await lib("xlsx");
+    const wb = XLSX.read(await file.arrayBuffer());
+    return { kind: "excel", meta: `إكسل، ${wb.SheetNames.length} شيت`,
+      text: wb.SheetNames.map(s => `## شيت «${s}»\n` + XLSX.utils.sheet_to_csv(wb.Sheets[s], { blankrows: false, strip: true })).join("\n\n") };
+  }
+  if (isPdf(file, ext)) {   // PDF: نصّ الصفحات مجّاناً، والصفحات المصوّرة بس بتروح للنموذج
+    const pdf = await openPdf(file), n = Math.min(pdf.numPages, MAX_DRAFT_PAGES), text = new Array(n), scanned = [];
+    for (let p = 1; p <= n; p++) {
+      const tc = await (await pdf.getPage(p)).getTextContent();
+      const t = tc.items.map(i => (i.str || "") + (i.hasEOL ? "\n" : "")).join("").normalize("NFKC").replace(/[ \t]+\n/g, "\n").trim();
+      if (t.replace(/\s/g, "").length < 20) scanned.push(p); else text[p - 1] = t;
+    }
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(PARALLEL, scanned.length) }, async () => {
+      while (next < scanned.length) { const p = scanned[next++]; text[p - 1] = await ocr(await pdfPageImage(pdf, p), c, signal); }
+    }));
+    return { kind: "pdf", text: pages(text, "صفحة"),
+      meta: `PDF، ${nPages(pdf.numPages)}` + (scanned.length ? `، ${scanned.length} منها انقرت بالنموذج` : "") + (pdf.numPages > n ? `، أوّل ${n} بس` : "") };
+  }
+  const parts = await toParts(file);   // Word وXML وCSV نصّ؛ الصور بتنقرا بالنموذج مرّة وحدة
+  if (parts.text) return { kind: "text", meta: `ملف .${ext}`, text: parts.text };
+  const text = [];
+  for (const img of parts.images) text.push(await ocr(img, c, signal));
+  return { kind: "image", meta: text.length > 1 ? `صور، ${nPages(text.length)}، انقرت بالنموذج` : "صورة، انقرت بالنموذج", text: pages(text, "صفحة") };
+}
+
+async function draftFor(file, c, signal) {
+  const hash = await fileHash(file).catch(() => null);
+  const have = hash && [...VAULT.values()].find(n => n.hash === hash);
+  if (have) return { note: have, reused: true };
+  const d = await fileToDraft(file, c, signal);
+  if (!d.text.trim()) throw new Error("ما لقيت إشي أقرأه بالملف");
+  const base = DRAFT_DIR + safeName(file.name || "صورة ملصوقة");
+  let path = base + ".md";
+  for (let i = 2; VAULT.has(path); i++) path = `${base} (${i}).md`;   // نفس الاسم لملف مختلف
+  return { note: await putNote({ path, text: `# ${file.name || "صورة ملصوقة"}\n\n${d.text}`, src: file.name || "", meta: d.meta, kind: d.kind, hash }), reused: false };
+}
+
+async function attachmentBlocks(files, c, signal) {
+  const res = await Promise.all(files.map(f => draftFor(f, c, signal).catch(e => ({ error: e.message || String(e) }))));
+  const blocks = [], failed = [], news = [], olds = [];
+  res.forEach((r, i) => {
     const name = files[i].name || "صورة ملصوقة";
-    if (p.error || (!(p.images || []).length && !(p.text || "").trim())) { failed.push(`${name}: ${p.error || "فاضي"}`); return; }
-    blocks.push({ type: "text", text: `Attached invoice file: ${name}` + (p.text ? `\n${p.text.slice(0, MAX_TEXT)}` : "") });
-    for (const url of p.images || []) blocks.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: url.slice(url.indexOf(",") + 1) } });
+    if (r.error) { failed.push(`${name}: ${r.error}`); return; }
+    const n = r.note, lines = n.text.split("\n");
+    (r.reused ? olds : news).push(title(n.path));
+    const head = `Attached file «${name}» ${r.reused ? "was read before; its draft is" : "is now read and saved as"} ${n.path} (${n.meta}, ${lines.length} lines)`;
+    blocks.push({ type: "text", text: n.text.length <= INLINE_DRAFT ? `${head}:\n${n.text}`
+      : `${head}. First ${PREVIEW_LINES} lines; read the rest with vault_search / vault_read:\n${lines.slice(0, PREVIEW_LINES).join("\n").slice(0, INLINE_DRAFT)}` });
   });
-  return { blocks, failed };
+  return { blocks, failed, news, olds };
 }
 
 async function chatSend() {
@@ -940,18 +1151,22 @@ async function chatSend() {
   say("me", text + (files.length ? "\n📎 " + files.map(f => f.name || "صورة ملصوقة").join("، ") : ""));
   $("send").disabled = true; $("stop").hidden = false; stopAsked = false;
   chatAbort = new AbortController();
-  const fb = /^claude-(opus-5|fable-5|sonnet-5-5)/.test(c.model) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" } : {};
+  // فهرس الخزنة قبل مرفقات هالرسالة، عشان ما تنذكر مرّتين
+  const ctx = ctxSent ? [] : [{ type: "text", text: vaultContext() }];
   let blocks = [];
   if (files.length) {
-    $("cstatus").textContent = "بجهّز المرفقات…";
-    const a = await attachmentBlocks(files);
+    $("cstatus").textContent = "بقرأ المرفقات مرّة وحدة وبحفظها بالخزنة…";
+    const a = await attachmentBlocks(files, c, chatAbort.signal);
     blocks = a.blocks;
+    if (a.news.length) say("step", "📄 انقرت وانحفظت بالخزنة: " + a.news.join("، "));
+    if (a.olds.length) say("step", "📄 مقروءة من قبل، من الخزنة بدون قراءة جديدة: " + a.olds.join("، "));
     if (a.failed.length) say("err", "ما قدرت أقرأ:\n" + a.failed.join("\n"));
   }
   // إذا الدور اللي قبل وقف (خطأ أو «وقّف») بعد نتائج أدوات ما انبعتت، الكلام الجديد بينضمّ لنفس رسالة المستخدم
-  const note = [...blocks, { type: "text", text: text + await selectionNote() }];
+  const note = [...ctx, ...blocks, { type: "text", text: text + await selectionNote() }];
   const last = CHAT[CHAT.length - 1];
   if (last && last.role === "user") last.content.push(...note); else CHAT.push({ role: "user", content: note });
+  ctxSent = true;
   saveChat();
   let Anthropic = null, cached = 0, total = 0;
   try {
@@ -961,13 +1176,9 @@ async function chatSend() {
       if (stopAsked) { say("step", "وقّفت بطلبك."); break; }
       if (step > MAX_STEPS) { say("err", `وصلت ${MAX_STEPS} خطوة ولسّا ما خلّصت — قلّي «كمّل» إذا بدّك أكمّل.`); break; }
       $("cstatus").textContent = "بفكّر…";
-      const msg = await client.beta.messages.create({
-        model: c.model, max_tokens: 16000, ...fb,
-        output_config: { effort: "medium" },
-        cache_control: { type: "ephemeral" },
-        system: EXCEL_SYSTEM + memoryBlock(), tools: TOOLS, messages: CHAT
-      }, { signal: chatAbort.signal });
+      const msg = await client.beta.messages.create(chatParams(c, CHAT), { signal: chatAbort.signal });
       const u = msg.usage || {};
+      console.info("MaliAI usage", u);   // للتأكّد من الكاش: cache_read_input_tokens لازم يكبر نداء ورا نداء
       cached += u.cache_read_input_tokens || 0;
       total += (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
       CHAT.push({ role: "assistant", content: msg.content });
@@ -1005,7 +1216,7 @@ async function chatSend() {
     if (m) say("err", m); else say("step", "وقّفت بطلبك.");
   }
   saveChat();
-  $("cstatus").textContent = total ? `⚡ ${Math.round(cached / total * 100)}% من هالطلب انقرا من الكاش` : "";
+  $("cstatus").textContent = total ? `⚡ ${Math.round(cached / total * 100)}% من هالطلب انقرا من الكاش (${cached.toLocaleString("en")} من ${total.toLocaleString("en")} توكن)` : "";
   $("send").disabled = false; $("stop").hidden = true;
 }
 $("send").onclick = chatSend;
@@ -1019,7 +1230,7 @@ $("newchat").onclick = () => {   // كبستين عشان ما تنمسح الم
     return;
   }
   delete b.dataset.sure; b.textContent = "محادثة جديدة";
-  CHAT = []; UI = []; $("chat").innerHTML = ""; $("cstatus").textContent = "";
+  CHAT = []; UI = []; ctxSent = false; $("chat").innerHTML = ""; $("cstatus").textContent = "";
   saveChat();
 };
 
@@ -1032,7 +1243,7 @@ $("t-inv").onclick = () => showTab(false);
 $("t-chat").onclick = () => showTab(true);
 
 fillCfg();
-renderMem();
+loadVault();
 loadChat();
 Office.onReady(info => { inExcel = info.host === Office.HostType.Excel; });
 </script>
