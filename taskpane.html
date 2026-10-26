@@ -6,85 +6,165 @@
 <title>MaliAI — تفريغ الفواتير</title>
 <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#ffffff; --bg2:#f4f6f8; --fg:#1b1d21; --fg2:#5b6270;
-  --line:#dfe3e8; --accent:#107c41; --accent2:#0d6435; --err:#c0392b;
+  --bg:#ffffff; --bg2:#f3f6f4; --fg:#18201b; --fg2:#5b6660; --line:#dde3df;
+  --accent:#107c41; --accent2:#0d6435; --tint:#e6f3eb; --err:#c0392b; --rec:#d23a2a;
+  --radius:12px;
 }
 @media (prefers-color-scheme: dark){
-  :root{ --bg:#1b1d21; --bg2:#25282c; --fg:#eceef1; --fg2:#a2a9b5; --line:#363a40; --accent:#2ea866; --accent2:#3cc078; --err:#ff7b6b; }
+  :root{ --bg:#161b18; --bg2:#202722; --fg:#e8eee9; --fg2:#a0aca5; --line:#343d37; --accent:#2ea866; --accent2:#3cc078; --tint:#1c3326; --err:#ff7b6b; --rec:#ff6a5a; }
 }
 *{ box-sizing:border-box; }
-body{ margin:0; padding:12px; background:var(--bg); color:var(--fg); font:14px/1.5 "Segoe UI",Tahoma,sans-serif; }
-header{ font-size:16px; margin-bottom:10px; }
-header b{ color:var(--accent); }
-.drop{ display:block; padding:18px 12px; border:2px dashed var(--line); border-radius:10px; background:var(--bg2); text-align:center; cursor:pointer; }
-.drop.over, .drop:focus-within{ border-color:var(--accent); }
+body{ margin:0; padding:12px 12px 20px; background:var(--bg); color:var(--fg);
+  font:14px/1.6 "IBM Plex Sans Arabic","Segoe UI",Tahoma,sans-serif; font-variant-numeric:tabular-nums; }
+button{ font:inherit; color:inherit; border-radius:8px; cursor:pointer; }
+button:disabled{ opacity:.45; cursor:default; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+svg{ width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; flex:none; }
+
+/* الرأس والتبويبات */
+.top{ display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+.brand{ display:flex; align-items:baseline; gap:6px; flex:1; min-width:0; }
+.brand b{ font-size:17px; font-weight:700; color:var(--accent); letter-spacing:.2px; }
+.brand span{ color:var(--fg2); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mark{ width:10px; height:10px; border-radius:2px; background:var(--accent); align-self:center; box-shadow:3px 3px 0 var(--tint); }
+.ghost{ padding:4px 10px; border:1px solid var(--line); background:transparent; color:var(--fg2); font-size:12px; }
+.ghost:hover{ color:var(--fg); border-color:var(--fg2); }
+.tabs{ display:flex; padding:3px; margin-bottom:12px; background:var(--bg2); border:1px solid var(--line); border-radius:10px; }
+.tabs button{ flex:1; padding:6px; border:0; background:transparent; color:var(--fg2); font-weight:500; }
+.tabs button[aria-selected="true"]{ background:var(--bg); color:var(--fg); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.08); }
+
+/* تبويب التفريغ */
+.drop{ display:block; padding:20px 12px; border:1.5px dashed var(--line); border-radius:var(--radius); background:var(--bg2); text-align:center; cursor:pointer; }
+.drop.over, .drop:focus-within{ border-color:var(--accent); background:var(--tint); }
 .drop small{ display:block; color:var(--fg2); }
 ul{ list-style:none; padding:0; margin:10px 0; }
 #list li{ padding:6px 8px; border-bottom:1px solid var(--line); font-size:13px; }
 #list li .st{ display:block; color:var(--fg2); }
 #list li.err .st{ color:var(--err); }
-button{ font:inherit; border-radius:8px; cursor:pointer; }
 #go{ width:100%; padding:10px; border:0; background:var(--accent); color:#fff; font-weight:600; }
-#go:hover{ background:var(--accent2); }
-#go:disabled{ opacity:.5; cursor:default; }
-#clear, #save, #stopInv, #vexport, #vimport{ padding:4px 10px; border:1px solid var(--line); background:var(--bg2); color:var(--fg); }
-button:focus-visible, input:focus-visible, select:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+#go:hover:not(:disabled){ background:var(--accent2); }
+#clear, #save, #stopInv, #vexport, #vimport{ padding:5px 10px; border:1px solid var(--line); background:var(--bg2); }
 #status{ min-height:1.5em; color:var(--fg2); }
-details{ margin-top:14px; border-top:1px solid var(--line); padding-top:8px; }
-summary{ cursor:pointer; color:var(--fg2); }
-details label{ display:block; margin:8px 0 2px; font-size:13px; }
-details input, details select{ width:100%; padding:6px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); font:inherit; }
-details small{ display:block; color:var(--fg2); margin:6px 0; }
-.tabs{ display:flex; gap:6px; margin-bottom:12px; }
-.tabs button{ flex:1; padding:7px; border:1px solid var(--line); background:var(--bg2); color:var(--fg); }
-.tabs button[aria-selected="true"]{ background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+
+/* المحادثة: البداية الفاضية */
+#empty{ padding:6px 2px 4px; }
+#empty .hi{ margin:0; font-size:18px; font-weight:600; }
+#empty .sub{ margin:2px 0 12px; color:var(--fg2); font-size:13px; }
+.sugg{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+.sugg button{ padding:5px 10px; border:1px solid var(--line); border-radius:999px; background:var(--bg); font-size:12.5px; text-align:start; }
+.sugg button:hover{ border-color:var(--accent); background:var(--tint); }
+
+/* الرسائل: الردّ بهامش أخضر زي هامش دفتر الأستاذ، والخطوات أسطر مأشّرة */
 #chat{ display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
-.msg{ padding:8px 10px; border-radius:10px; white-space:pre-wrap; overflow-wrap:anywhere; }
-.msg.me{ background:var(--bg2); border:1px solid var(--line); align-self:flex-start; max-width:90%; }
-.msg.ai{ border:1px solid var(--accent); }
-.msg.step{ padding:0 4px; color:var(--fg2); font-size:12px; }
-.msg.err{ color:var(--err); }
-#ask{ width:100%; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; resize:vertical; }
-.row{ display:flex; gap:6px; margin-top:6px; }
-#send{ flex:1; padding:8px; border:0; background:var(--accent); color:#fff; font-weight:600; }
-#send:disabled{ opacity:.5; cursor:default; }
-#stop, #newchat, #attach{ padding:8px 10px; border:1px solid var(--line); background:var(--bg2); color:var(--fg); }
-#tab-chat.over #ask{ border-color:var(--accent); }
-#chips{ font-size:12px; color:var(--fg2); margin-bottom:4px; }
-#chips button, #vaultList button{ padding:0 6px; border:0; background:none; color:var(--err); }
-.msg.ai{ white-space:normal; }
+.msg{ overflow-wrap:anywhere; }
+.msg.me{ align-self:flex-start; max-width:88%; padding:7px 11px; background:var(--bg2); border:1px solid var(--line); border-radius:var(--radius); border-start-start-radius:4px; white-space:pre-wrap; }
+.msg.ai{ padding:2px 0; padding-inline-start:12px; border-inline-start:3px solid var(--accent); }
+.msg.step{ margin-inline-start:2px; padding-inline-start:10px; border-inline-start:1px dashed var(--line); color:var(--fg2); font-size:12px; line-height:1.5; }
+.msg.err{ padding:6px 10px; border-radius:8px; background:color-mix(in srgb, var(--err) 10%, transparent); color:var(--err); font-size:13px; white-space:pre-wrap; }
 .msg.ai p{ margin:0 0 6px; }
-.msg.ai ul, .msg.ai ol{ margin:4px 0 6px; padding-inline-start:20px; }
+.msg.ai ul, .msg.ai ol{ margin:4px 0 6px; padding-inline-start:20px; list-style:revert; }
 .msg.ai h4{ margin:6px 0 4px; font-size:14px; }
+.msg.ai b{ font-weight:700; }
 .msg.ai table{ border-collapse:collapse; margin:6px 0; font-size:12px; display:block; max-width:100%; overflow-x:auto; }
-.msg.ai th, .msg.ai td{ border:1px solid var(--line); padding:3px 6px; text-align:start; }
-.msg.ai th{ background:var(--bg2); }
-.msg.ai code{ background:var(--bg2); padding:0 3px; border-radius:4px; direction:ltr; unicode-bidi:isolate; }
-#vault{ margin-top:10px; }
+.msg.ai th, .msg.ai td{ border:1px solid var(--line); padding:3px 7px; text-align:start; }
+.msg.ai th{ background:var(--bg2); font-weight:600; }
+.msg.ai code{ background:var(--bg2); padding:0 4px; border-radius:4px; direction:ltr; unicode-bidi:isolate; font-size:12px; }
+
+/* مربّع الكتابة */
+.composer{ border:1px solid var(--line); border-radius:var(--radius); background:var(--bg); transition:border-color .15s; }
+.composer:focus-within, #tab-chat.over .composer{ border-color:var(--accent); }
+#chips{ margin:8px 10px 0; padding:4px 8px; border-radius:8px; background:var(--tint); font-size:12px; color:var(--fg2); }
+#chips button, #vaultList button{ padding:0 6px; border:0; background:none; color:var(--err); }
+#ask{ display:block; width:100%; min-height:52px; padding:10px 12px 4px; border:0; background:transparent; color:var(--fg); font:inherit; resize:vertical; outline:none; }
+.tools{ display:flex; align-items:center; gap:4px; padding:4px 6px 6px; }
+.tools .grow{ flex:1; }
+.icon{ display:grid; place-items:center; width:34px; height:34px; padding:0; border:0; background:transparent; color:var(--fg2); }
+.icon:hover:not(:disabled){ background:var(--bg2); color:var(--fg); }
+#send{ display:flex; align-items:center; gap:6px; padding:6px 14px; border:0; background:var(--accent); color:#fff; font-weight:600; }
+#send:hover:not(:disabled){ background:var(--accent2); }
+#send svg{ transform:scaleX(-1); }
+#stop{ padding:6px 12px; border:1px solid var(--err); background:transparent; color:var(--err); font-weight:600; }
+
+/* التسجيل: أعمدة رفيعة بتتحرّك مع الصوت بدل مربّع الكتابة */
+#recbar{ display:flex; align-items:center; gap:8px; height:52px; padding:0 12px; }
+#recbar[hidden]{ display:none; }
+#recbar .dot{ width:9px; height:9px; border-radius:50%; background:var(--rec); animation:pulse 1.2s ease-in-out infinite; }
+#rectime{ min-width:34px; color:var(--rec); font-weight:600; }
+#meter{ flex:1; display:flex; align-items:center; gap:2px; height:30px; overflow:hidden; }
+#meter i{ flex:1; height:100%; border-radius:2px; background:var(--accent); transform:scaleY(.12); transition:transform 60ms linear; }
+.composer.rec{ border-color:var(--rec); }
+.composer.rec #ask{ display:none; }
+#mic[aria-pressed="true"]{ background:var(--rec); color:#fff; }
+@keyframes pulse{ 50%{ opacity:.25; } }
+
+#cstatus{ min-height:1.4em; margin:6px 2px 0; color:var(--fg2); font-size:12px; }
+#cstatus.busy::after{ content:""; display:inline-block; width:1.2em; text-align:start; animation:dots 1.2s steps(4) infinite; }
+@keyframes dots{ 0%{ content:""; } 25%{ content:"."; } 50%{ content:".."; } 75%{ content:"..."; } }
+@media (prefers-reduced-motion: reduce){ *{ animation:none !important; transition:none !important; } }
+
+/* الخزنة والإعدادات */
+details{ margin-top:12px; border-top:1px solid var(--line); padding-top:8px; }
+summary{ cursor:pointer; color:var(--fg2); font-size:13px; }
+summary:hover{ color:var(--fg); }
+details label{ display:block; margin:8px 0 2px; font-size:12.5px; color:var(--fg2); }
+details input, details select{ width:100%; padding:7px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+details small{ display:block; color:var(--fg2); margin:6px 0; font-size:12px; }
+fieldset{ margin:10px 0 0; padding:4px 10px 10px; border:1px solid var(--line); border-radius:10px; }
+legend{ padding:0 6px; font-size:12.5px; font-weight:600; }
+.row{ display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
 #vaultList{ padding-inline-start:18px; font-size:12px; color:var(--fg2); }
 #vaultList li.h{ list-style:none; margin:6px 0 2px; margin-inline-start:-18px; color:var(--fg); font-weight:600; }
 </style>
 </head>
 <body>
-<header><b>MaliAI</b> · محاسبك جوّا إكسل</header>
+<header class="top">
+  <div class="brand"><span class="mark" aria-hidden="true"></span><b>MaliAI</b><span>محاسبك جوّا إكسل</span></div>
+  <button id="newchat" class="ghost" type="button" title="بتمسح المحادثة بس، والذاكرة والمسودات بيضلّوا" hidden>محادثة جديدة</button>
+</header>
 <div class="tabs" role="tablist">
   <button id="t-inv" role="tab" aria-selected="true" aria-controls="tab-inv">تفريغ الفواتير</button>
   <button id="t-chat" role="tab" aria-selected="false" aria-controls="tab-chat">مساعد إكسل</button>
 </div>
 
 <section id="tab-chat" role="tabpanel" hidden>
-  <div id="chat"></div>
-  <div id="chips" hidden></div>
-  <textarea id="ask" rows="3" placeholder="مثلاً: أرفق ملف إكسل أو PDF واسأل عنه، أو فرّغ الفواتير المرفقة بشيت «المصاريف» تحت آخر صفّ"></textarea>
-  <input id="cfiles" type="file" multiple hidden>
-  <div class="row">
-    <button id="attach" type="button" title="أرفق ملف إكسل أو PDF أو فواتير (أو اسحبها أو الصقها هون) — بينقرا مرّة وحدة وبينحفظ بالخزنة">📎 أرفق</button>
-    <button id="send" type="button">ابعت</button>
-    <button id="stop" type="button" hidden>وقّف</button>
-    <button id="newchat" type="button">محادثة جديدة</button>
+  <div id="empty">
+    <p class="hi">شو بدّك نعمل بالشيت؟</p>
+    <p class="sub">اكتب أو احكي بصوتك، وأرفق إكسل أو PDF. الملف بينقرا مرّة وحدة وبتذكّره بكل محادثة.</p>
+    <div class="sugg">
+      <button type="button">شيل الألوان والتنسيق من الجدول اللي محدّده</button>
+      <button type="button">احذف الصفوف الفاضية والمكرّرة من شيت المصاريف</button>
+      <button type="button">حط مربّعات صح بعمود «تمّ الدفع»</button>
+      <button type="button">ارسم سهم من خليّة الإجمالي لملاحظة فيها شرح الرقم</button>
+      <button type="button">لخّصلي المصاريف حسب الحساب بجدول ورسم</button>
+    </div>
   </div>
+  <div id="chat"></div>
+  <div class="composer" id="composer">
+    <div id="chips" hidden></div>
+    <textarea id="ask" rows="2" placeholder="اكتب طلبك، أو اكبس المايك واحكي"></textarea>
+    <div id="recbar" hidden>
+      <span class="dot" aria-hidden="true"></span><span id="rectime">0:00</span>
+      <div id="meter" aria-hidden="true"></div>
+      <button id="reccancel" class="ghost" type="button">إلغاء</button>
+    </div>
+    <div class="tools">
+      <button id="attach" class="icon" type="button" aria-label="أرفق ملف" title="أرفق إكسل أو PDF أو فواتير (أو اسحبها أو الصقها هون). بينقرا مرّة وحدة وبينحفظ بالخزنة">
+        <svg viewBox="0 0 24 24"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/></svg>
+      </button>
+      <button id="mic" class="icon" type="button" aria-label="سجّل صوتك" aria-pressed="false" title="سجّل صوتك. اكبس كمان لمّا تخلّص، وEsc للإلغاء">
+        <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      </button>
+      <span class="grow"></span>
+      <button id="stop" type="button" hidden>وقّف</button>
+      <button id="send" type="button">ابعت <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+    </div>
+  </div>
+  <input id="cfiles" type="file" multiple hidden>
   <p id="cstatus" role="status" aria-live="polite"></p>
   <details id="vault">
     <summary>🧠 خزنة MaliAI: ذاكرة ومسودات (<span id="vaultN">0</span>)</summary>
@@ -112,21 +192,34 @@ details small{ display:block; color:var(--fg2); margin:6px 0; }
 </section>
 
 <details id="settings">
-  <summary>الإعدادات — مفتاح الذكاء الاصطناعي</summary>
-  <label for="prov">المزوّد</label><select id="prov"></select>
-  <label for="model">النموذج</label><input id="model" dir="ltr">
-  <label for="url">الرابط</label><input id="url" dir="ltr">
-  <label for="key">المفتاح</label><input id="key" type="password" dir="ltr" autocomplete="off">
-  <small>المفتاح بينحفظ على جهازك بس، مش بكود الصفحة.</small>
+  <summary>الإعدادات: المفاتيح</summary>
+  <fieldset>
+    <legend>الذكاء الاصطناعي</legend>
+    <label for="prov">المزوّد</label><select id="prov"></select>
+    <label for="model">النموذج</label><input id="model" dir="ltr">
+    <label for="url">الرابط</label><input id="url" dir="ltr">
+    <label for="key">المفتاح</label><input id="key" type="password" dir="ltr" autocomplete="off">
+  </fieldset>
+  <fieldset>
+    <legend>التسجيل الصوتي</legend>
+    <label for="vprov">محرّك تحويل الصوت لنصّ</label><select id="vprov"></select>
+    <label for="vkey">مفتاح الصوت</label><input id="vkey" type="password" dir="ltr" autocomplete="off">
+  </fieldset>
+  <small>المفاتيح بتنحفظ على جهازك بس، مش بكود الصفحة.</small>
   <button id="save" type="button">احفظ</button>
 </details>
-
 <script>
 const PROVIDERS = {
   gemini:     { label: "Google Gemini (سريع، مفتاح مجاني من aistudio.google.com)", url: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-flash-latest" },
   anthropic:  { label: "Anthropic Claude (مفتاح من console.anthropic.com)", url: "https://api.anthropic.com", model: "claude-opus-5-5" },
   openrouter: { label: "OpenRouter", url: "https://openrouter.ai/api/v1", model: "google/gemini-2.5-flash" },
   custom:     { label: "مخصّص (صيغة OpenAI)", url: "", model: "" }
+};
+// محرّكات تحويل الصوت لنصّ، كل واحد بمفتاحه
+const VOICES = {
+  elevenlabs: "ElevenLabs Scribe v2 (الأقوى بالعربي والأرقام، مفتاح من elevenlabs.io)",
+  openai:     "OpenAI gpt-4o-transcribe (مفتاح من platform.openai.com)",
+  groq:       "Groq Whisper large v3 (سريع، وفيه استعمال مجاني من console.groq.com)"
 };
 const CFG_KEY = "maliai.invoices.cfg";
 const MAX_SIDE = 1600;    // أكبر ضلع للصورة المرسلة: أصغر = أسرع رفع
@@ -184,6 +277,9 @@ function fillCfg() {
   $("url").value = c.url || PROVIDERS[p].url;
   $("model").value = c.model || PROVIDERS[p].model;
   $("key").value = c.key || "";
+  $("vprov").innerHTML = Object.entries(VOICES).map(([k, v]) => `<option value="${k}">${v}</option>`).join("");
+  $("vprov").value = c.voice || "elevenlabs";
+  $("vkey").value = c.voiceKey || "";
   if (!c.key) $("settings").open = true;
 }
 $("prov").onchange = () => {
@@ -191,7 +287,8 @@ $("prov").onchange = () => {
   if (p.url) { $("url").value = p.url; $("model").value = p.model; }
 };
 $("save").onclick = () => {
-  const c = { provider: $("prov").value, url: $("url").value.trim(), model: $("model").value.trim(), key: $("key").value.trim() };
+  const c = { provider: $("prov").value, url: $("url").value.trim(), model: $("model").value.trim(), key: $("key").value.trim(),
+    voice: $("vprov").value, voiceKey: $("vkey").value.trim() };
   try { localStorage.setItem(CFG_KEY, JSON.stringify(c)); setStatus("انحفظت الإعدادات."); } catch (e) { setStatus("ما قدرت أحفظ الإعدادات بهالجهاز."); }
   if (c.key) $("settings").open = false;
 };
@@ -528,6 +625,10 @@ How you work:
 - Prefer live formulas over typed results so the workbook stays right when data changes. Write formulas with English function names and comma separators. Quote sheet names in references, e.g. ='الفواتير'!I2.
 - Check every number you produce. write_range returns the computed values and any error cells: fix every #REF!, #VALUE!, #DIV/0!, #NAME?, #N/A, #SPILL!. Then cross-check totals a second, independent way (for example, the grand total of a summary equals the SUM of the source column) and tell the accountant what you checked and whether it matched.
 - Never delete, clear or overwrite existing data without the accountant's explicit yes in this conversation; only then pass overwrite or confirmed.
+- Deleting by condition (empty rows, duplicates, a value, numbers above or below a limit): use delete_rows_where. Call it first without confirmed: it deletes nothing and returns how many rows match with examples. Show the accountant the count and a few examples, and only after their yes call it again with confirmed: true. Do the same with delete_objects for charts, shapes, pivot tables, tables and named ranges.
+- Removing colors and formatting: use clear_formatting on exactly the range asked (fills, font colors, bold and italic, borders, conditional formatting, drop-down validation, number formats, checkboxes). It never touches the values.
+- Objects over the sheet: add_shape places shapes, lines, arrows and text boxes, positioned by cells so they line up with the data. add_checkboxes puts real tick boxes in cells (TRUE when ticked) or ✓/✗ marks colored green and red. workbook_overview lists the charts, shapes and pivot tables already on each sheet.
+- The accountant may dictate by voice, so a message can be a speech transcription: read names and numbers with that in mind, and ask when a number looks misheard.
 - Work in blocks: write headers and all formulas of a table in one write_range call, not cell by cell.
 - The invoice tab of this add-in fills the sheets «الفواتير» (one row per invoice) and «البنود» (one row per line item); reuse them when the accountant asks about invoices.
 - Every file the accountant attaches (Excel, PDF, invoice photos) is read once and saved as a draft in your vault; it arrives with its draft path, in full when small or as a preview when big, and you read the rest from the vault. When the files are invoices, book them the way they ask: first read the target sheet's header row and its last used row, map every field to those exact columns in that order, and append below the existing rows; never overwrite. If they don't say where, use «الفواتير» (${INV_HEAD.join(" | ")}) and «البنود» (${ITEM_HEAD.join(" | ")}), creating them with these headers if missing. Check every invoice (each line's quantity × unit price, the sum of lines, subtotal + tax = total, the 16% rate, the seller's tax number), read back what you wrote and confirm it matches the invoice, and list anything unclear instead of guessing.
@@ -592,6 +693,30 @@ const TOOLS = [
       required: ["name", "source_sheet", "source_address", "dest_sheet", "dest_cell", "rows", "values"] } },
   { name: "define_name", description: "Create a workbook-level named range.",
     input_schema: { type: "object", properties: { name: { type: "string" }, sheet: { type: "string" }, address: { type: "string" } }, required: ["name", "address"] } },
+  { name: "delete_rows_where", description: "Delete the rows of a data range that match a condition, shifting the rows below up inside that range only. condition: empty or not_empty (in column), equals, not_equals, contains, greater_than, less_than (compare column with value), duplicate (repeats of an earlier row's value in column; without column, fully repeated rows), blank_row (every cell of the row empty). Without confirmed it deletes nothing and returns the count and examples.",
+    input_schema: { type: "object", properties: {
+      sheet: { type: "string" }, address: { type: "string", description: "The data range, including its header row when has_headers is true, e.g. A1:H500" },
+      column: { type: ["string", "integer"], description: "Header text, column letter, or 0-based index inside the range" },
+      condition: { type: "string", enum: ["empty", "not_empty", "equals", "not_equals", "contains", "greater_than", "less_than", "duplicate", "blank_row"] },
+      value: { type: ["string", "number"] }, has_headers: { type: "boolean", description: "Default true" },
+      confirmed: { type: "boolean", description: "true only after the accountant agreed to the shown count" } }, required: ["address", "condition"] } },
+  { name: "clear_formatting", description: "Remove colors and formatting from a range (or the whole used area of a sheet when address is omitted) without touching values. what lists the parts to remove; default fill and font_color. all_formats resets every format.",
+    input_schema: { type: "object", properties: {
+      sheet: { type: "string" }, address: { type: "string" },
+      what: { type: "array", items: { type: "string", enum: ["fill", "font_color", "font_style", "borders", "conditional_formats", "data_validation", "number_format", "hyperlinks", "checkboxes", "all_formats"] } } } } },
+  { name: "delete_objects", description: "Remove objects from a sheet: charts, shapes (including lines and text boxes), pivots, tables (turned back into plain ranges; the data stays) or workbook names. names picks which ones; omit it for all of that kind on the sheet. Without confirmed it removes nothing and lists what would go.",
+    input_schema: { type: "object", properties: {
+      sheet: { type: "string" }, kind: { type: "string", enum: ["charts", "shapes", "pivots", "tables", "names"] },
+      names: { type: "array", items: { type: "string" } }, confirmed: { type: "boolean" } }, required: ["kind"] } },
+  { name: "add_shape", description: "Place a shape over the sheet, sized and positioned by cells. type: Line or Arrow (from the center of from_cell to the center of to_cell), TextBox, or an Excel geometric shape such as Rectangle, RoundRectangle, Ellipse, Triangle, Diamond, RightArrow, LeftArrow, UpArrow, DownArrow, Star5, Heart, Cloud, WedgeRectCallout, FlowChartProcess, FlowChartDecision, Chevron, MathMultiply, MathPlus. Other shapes cover from_cell to to_cell. Colors are hex; fill \"none\" leaves it transparent.",
+    input_schema: { type: "object", properties: {
+      sheet: { type: "string" }, type: { type: "string" }, from_cell: { type: "string" }, to_cell: { type: "string" },
+      text: { type: "string" }, fill: { type: "string" }, line_color: { type: "string" }, line_weight: { type: "number" },
+      font_color: { type: "string" }, font_size: { type: "number" }, bold: { type: "boolean" }, name: { type: "string" } }, required: ["type", "from_cell"] } },
+  { name: "add_checkboxes", description: "Put tick boxes in cells. style checkbox: real Excel checkboxes holding TRUE/FALSE (count ticks with =COUNTIF(range,TRUE)); on an older Excel it falls back to tick_cross. style tick_cross: a ✓/✗ drop-down, green for ✓ and red for ✗. checked sets new checkboxes ticked.",
+    input_schema: { type: "object", properties: {
+      sheet: { type: "string" }, address: { type: "string" }, style: { type: "string", enum: ["checkbox", "tick_cross"] },
+      checked: { type: "boolean" }, overwrite: { type: "boolean", description: "Replace non-boolean values with checkboxes, only after the accountant agreed" } }, required: ["address"] } },
   { name: "vault_search", description: `Search your vault (memory notes and file drafts) for a name, number or word; several words must all appear on the same line. Arabic letter forms and Arabic-Indic digits match their plain forms. Returns up to ${MAX_HITS} matching lines grouped by note with their line numbers; for Excel drafts each group also gives the sheet and its header row.`,
     input_schema: { type: "object", properties: {
       query: { type: "string" }, folder: { type: "string", enum: ["ذاكرة", "مسودات"], description: "Optional: search one folder only" } }, required: ["query"] } },
@@ -618,6 +743,8 @@ const chatParams = (c, messages) => ({
 });
 
 const ws = (ctx, name) => name ? ctx.workbook.worksheets.getItem(name) : ctx.workbook.worksheets.getActiveWorksheet();
+const apiOK = v => { try { return Office.context.requirements.isSetSupported("ExcelApi", v); } catch (e) { return false; } };
+const MAX_SCAN = 300000;   // ponytail: أكبر نطاق بنفحصه للحذف بشرط، أكبر من هيك قسّمه
 const grid2 = (rows, cols, v) => Array.from({ length: rows }, () => Array(cols).fill(v));
 const STEP_LABEL = {
   workbook_overview: () => "بتعرّف على الملف", read_range: a => `بقرأ ${a.address}${a.sheet ? " من «" + a.sheet + "»" : ""}`,
@@ -628,6 +755,12 @@ const STEP_LABEL = {
   change_structure: a => ({ insert_rows: "بضيف صفوف", insert_columns: "بضيف أعمدة", delete_rows: "بحذف صفوف", delete_columns: "بحذف أعمدة",
     clear_contents: "بفضّي", delete_sheet: "بحذف الشيت" }[a.action] || a.action) + " " + (a.address || a.sheet || "") + (a.confirmed ? "" : " (بستنّى موافقتك)"),
   create_pivot: a => `بعمل Pivot «${a.name}»`, define_name: a => `باسم النطاق ${a.name}`,
+  delete_rows_where: a => `${a.confirmed ? "بحذف" : "بعدّ"} الصفوف (${({ empty: "فاضية", not_empty: "مش فاضية", equals: "= " + a.value, not_equals: "≠ " + a.value,
+    contains: "فيها " + a.value, greater_than: "> " + a.value, less_than: "< " + a.value, duplicate: "مكرّرة", blank_row: "فاضية كلّها" })[a.condition] || a.condition}) بـ ${a.address}`,
+  clear_formatting: a => `بشيل ${(a.what && a.what.includes("all_formats")) ? "كل التنسيق" : "الألوان والتنسيق"} من ${a.address || "الشيت"}`,
+  delete_objects: a => `${a.confirmed ? "بحذف" : "بعدّ"} ${({ charts: "الرسومات", shapes: "الأشكال", pivots: "جداول Pivot", tables: "الجداول", names: "الأسماء" })[a.kind] || a.kind}`,
+  add_shape: a => `برسم ${({ line: "خطّ", arrow: "سهم", textbox: "مربّع نصّ" })[String(a.type).toLowerCase()] || "شكل"} عند ${a.from_cell}${a.to_cell ? "←" + a.to_cell : ""}`,
+  add_checkboxes: a => `بحطّ ${a.style === "tick_cross" ? "✓/✗" : "مربّعات صح"} بـ ${a.address}`,
   vault_search: a => `🧠 بدوّر بالخزنة عن «${a.query}»`, vault_read: a => `🧠 بقرأ ${a.path}${a.from_line > 1 ? " من سطر " + a.from_line : ""}`,
   vault_write: a => `🧠 ${a.mode === "append" ? "زدت على" : "حفظت"} ${a.path}`, vault_delete: a => `🧠 مسحت ${a.path}`
 };
@@ -643,10 +776,21 @@ const HANDLERS = {
     const tRanges = tables.items.map(t => { const r = t.getRange(); r.load("address"); return r; });
     await ctx.sync();
     const heads = used.map(u => { if (u.isNullObject) return null; const h = u.getRow(0); h.load("values"); return h; });
+    // الأشياء فوق الشيت: رسومات وأشكال وPivot
+    const objs = sheets.items.map(s => {
+      const o = { charts: s.charts, pivots: s.pivotTables, ...(apiOK("1.9") ? { shapes: s.shapes } : {}) };
+      Object.values(o).forEach(c => c.load("items/name"));
+      return o;
+    });
     await ctx.sync();
+    const objsOf = i => {
+      const o = {};
+      for (const [k, c] of Object.entries(objs[i])) if (c.items.length) o[k] = c.items.slice(0, 30).map(x => x.name);
+      return Object.keys(o).length ? { objects: o } : {};
+    };
     return { active_sheet: active.name, selection: sel.address,
-      sheets: sheets.items.map((s, i) => used[i].isNullObject ? { name: s.name, empty: true }
-        : { name: s.name, used: used[i].address, rows: used[i].rowCount, columns: used[i].columnCount, header: heads[i].values[0].slice(0, 40) }),
+      sheets: sheets.items.map((s, i) => used[i].isNullObject ? { name: s.name, empty: true, ...objsOf(i) }
+        : { name: s.name, used: used[i].address, rows: used[i].rowCount, columns: used[i].columnCount, header: heads[i].values[0].slice(0, 40), ...objsOf(i) }),
       tables: tables.items.map((t, i) => ({ name: t.name, address: tRanges[i].address })) };
   }),
 
@@ -794,6 +938,171 @@ const HANDLERS = {
     });
   },
 
+  // حذف بشرط: أوّل نداء بيعدّ وبيعطي أمثلة بس، والحذف الفعلي بعد موافقة المحاسب
+  delete_rows_where: (a) => Excel.run(async ctx => {
+    const s = ws(ctx, a.sheet), r = s.getRange(a.address);
+    r.load("address,rowIndex,columnIndex,rowCount,columnCount"); await ctx.sync();
+    if (r.rowCount * r.columnCount > MAX_SCAN) throw new Error(`${r.address} has ${r.rowCount * r.columnCount} cells; work on at most ${MAX_SCAN} at a time`);
+    r.load("values"); await ctx.sync();
+    const head = a.has_headers === false ? 0 : 1, rows = r.values.slice(head), cond = a.condition;
+    let col = -1;
+    if (a.column != null && a.column !== "") {
+      const c = String(a.column).trim();
+      col = typeof a.column === "number" ? a.column
+        : head && r.values[0].findIndex(h => norm(h).trim() === norm(c)) >= 0 ? r.values[0].findIndex(h => norm(h).trim() === norm(c))
+        : /^[A-Za-z]{1,3}$/.test(c) ? [...c.toUpperCase()].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1 - r.columnIndex : -1;
+      if (col < 0 || col >= r.columnCount) throw new Error(`column ${c} is not in ${r.address}` + (head ? `; headers: ${r.values[0].join(" | ")}` : ""));
+    } else if (!["duplicate", "blank_row"].includes(cond)) throw new Error("column is required for " + cond);
+    const empty = v => v === "" || v == null, val = norm(a.value ?? "").trim(), n = num(a.value);
+    const eq = v => typeof v === "number" && n !== "" ? v === n : norm(v).trim() === val;
+    const seen = new Set();
+    const hit = row => {
+      const v = row[col];
+      switch (cond) {
+        case "empty": return empty(v);
+        case "not_empty": return !empty(v);
+        case "equals": return eq(v);
+        case "not_equals": return !eq(v);
+        case "contains": return norm(v).includes(val);
+        case "greater_than": return num(v) !== "" && n !== "" && num(v) > n;
+        case "less_than": return num(v) !== "" && n !== "" && num(v) < n;
+        case "blank_row": return row.every(empty);
+        case "duplicate": {
+          if (col >= 0 ? empty(v) : row.every(empty)) return false;
+          const k = col >= 0 ? norm(v).trim() : row.map(x => norm(x).trim()).join("\u0001");
+          if (seen.has(k)) return true;
+          seen.add(k); return false;
+        }
+        default: throw new Error("unknown condition " + cond);
+      }
+    };
+    const idx = [];
+    rows.forEach((row, i) => { if (hit(row)) idx.push(i); });
+    const rowNo = i => r.rowIndex + head + i + 1;
+    if (!a.confirmed || !idx.length) return { matches: idx.length, of_rows: rows.length, deleted: 0,
+      examples: idx.slice(0, 8).map(i => ({ row: rowNo(i), values: rows[i] })),
+      ...(idx.length ? { next: "Tell the accountant the count with a few examples; after their yes call again with confirmed: true." } : {}) };
+    // من تحت لفوق، وكل مجموعة صفوف متتالية بضربة وحدة
+    const runs = [];
+    for (const i of idx) { const l = runs[runs.length - 1]; if (l && l[0] + l[1] === i) l[1]++; else runs.push([i, 1]); }
+    for (const [st, len] of runs.reverse()) s.getRangeByIndexes(r.rowIndex + head + st, r.columnIndex, len, r.columnCount).delete("Up");
+    await ctx.sync();
+    return { deleted: idx.length, rows_left: rows.length - idx.length };
+  }),
+
+  // شيل الألوان والتنسيق بدون ما تنلمس القيم
+  clear_formatting: ({ sheet, address, what }) => Excel.run(async ctx => {
+    const s = ws(ctx, sheet), r = address ? s.getRange(address) : s.getUsedRangeOrNullObject();
+    r.load("address,rowCount,columnCount"); await ctx.sync();
+    if (r.isNullObject) return { cleared: [], note: "the sheet is empty" };
+    const parts = Array.isArray(what) && what.length ? what : ["fill", "font_color"];
+    for (const w of parts) {
+      if (w === "all_formats") r.clear("Formats");
+      else if (w === "fill") r.format.fill.clear();
+      else if (w === "font_color") r.format.font.color = "#000000";
+      else if (w === "font_style") Object.assign(r.format.font, { bold: false, italic: false, underline: "None", strikethrough: false });
+      else if (w === "borders") {
+        const edges = ["EdgeTop", "EdgeBottom", "EdgeLeft", "EdgeRight", "DiagonalDown", "DiagonalUp"];
+        if (r.rowCount > 1) edges.push("InsideHorizontal");
+        if (r.columnCount > 1) edges.push("InsideVertical");
+        edges.forEach(e => { r.format.borders.getItem(e).style = "None"; });
+      }
+      else if (w === "conditional_formats") r.conditionalFormats.clearAll();
+      else if (w === "data_validation") r.dataValidation.clear();
+      else if (w === "number_format") {
+        if (r.rowCount * r.columnCount > MAX_SCAN) throw new Error(`${r.address} is too big for number_format in one call`);
+        r.numberFormat = grid2(r.rowCount, r.columnCount, "General");
+      }
+      else if (w === "hyperlinks") r.clear("Hyperlinks");
+      else if (w === "checkboxes") {
+        if (!apiOK("1.18")) throw new Error("this Excel version has no in-cell checkboxes");
+        r.control = { type: "Empty" };
+      }
+      else throw new Error("unknown part " + w);
+    }
+    await ctx.sync();
+    return { cleared: parts, address: r.address };
+  }),
+
+  delete_objects: ({ sheet, kind, names, confirmed }) => Excel.run(async ctx => {
+    const s = ws(ctx, sheet);
+    if (kind === "shapes" && !apiOK("1.9")) throw new Error("this Excel version has no shapes API");
+    const coll = { charts: s.charts, pivots: s.pivotTables, tables: s.tables, shapes: kind === "shapes" ? s.shapes : null, names: ctx.workbook.names }[kind];
+    if (!coll) throw new Error("unknown kind " + kind);
+    coll.load("items/name"); await ctx.sync();
+    const pick = coll.items.filter(x => !names || !names.length || names.includes(x.name));
+    if (!pick.length) return { found: 0, available: coll.items.map(x => x.name) };
+    if (!confirmed) return { would_remove: pick.map(x => x.name), next: "Show the accountant this list; after their yes call again with confirmed: true." };
+    pick.forEach(x => kind === "tables" ? x.convertToRange() : x.delete());
+    await ctx.sync();
+    return { removed: pick.map(x => x.name), kind };
+  }),
+
+  // أشكال وخطوط وأسهم فوق الشيت، مكانها وحجمها من الخلايا عشان تيجي مظبوطة على الجدول
+  add_shape: (a) => Excel.run(async ctx => {
+    if (!apiOK("1.9")) throw new Error("this Excel version has no shapes API (needs ExcelApi 1.9)");
+    const s = ws(ctx, a.sheet), from = s.getRange(a.from_cell), to = s.getRange(a.to_cell || a.from_cell);
+    from.load("left,top,width,height"); to.load("left,top,width,height");
+    await ctx.sync();
+    const t = String(a.type || "Rectangle").replace(/[\s_-]/g, "").toLowerCase();
+    let sh;
+    if (t === "line" || t === "arrow") {
+      sh = s.shapes.addLine(from.left + from.width / 2, from.top + from.height / 2, to.left + to.width / 2, to.top + to.height / 2, "Straight");
+      if (t === "arrow") sh.line.endArrowheadStyle = "Triangle";
+      sh.lineFormat.weight = a.line_weight || 1.75;
+      sh.lineFormat.color = a.line_color || "#107C41";
+    } else {
+      const geo = t === "textbox" ? null : Object.values(Excel.GeometricShapeType).find(v => v.toLowerCase() === t);
+      if (t !== "textbox" && !geo) throw new Error(`unknown shape type ${a.type}; use Line, Arrow, TextBox, Rectangle, RoundRectangle, Ellipse, RightArrow, Star5, WedgeRectCallout…`);
+      sh = geo ? s.shapes.addGeometricShape(geo) : s.shapes.addTextBox(a.text || "");
+      const L = Math.min(from.left, to.left), T = Math.min(from.top, to.top);
+      sh.left = L; sh.top = T;
+      sh.width = Math.max(12, Math.max(from.left + from.width, to.left + to.width) - L);
+      sh.height = Math.max(12, Math.max(from.top + from.height, to.top + to.height) - T);
+      if (a.text) {
+        if (geo) sh.textFrame.textRange.text = a.text;
+        const f = sh.textFrame.textRange.font;
+        if (a.font_color) f.color = a.font_color;
+        if (a.font_size) f.size = a.font_size;
+        if (a.bold != null) f.bold = a.bold;
+        sh.textFrame.horizontalAlignment = "Center";
+        sh.textFrame.verticalAlignment = "Middle";
+      }
+      if (a.fill === "none") sh.fill.clear(); else if (a.fill) sh.fill.setSolidColor(a.fill);
+      if (a.line_color) sh.lineFormat.color = a.line_color;
+      if (a.line_weight) sh.lineFormat.weight = a.line_weight;
+    }
+    if (a.name) sh.name = a.name;
+    sh.load("name"); await ctx.sync();
+    return { shape: sh.name };
+  }),
+
+  add_checkboxes: ({ sheet, address, style = "checkbox", checked = false, overwrite }) => Excel.run(async ctx => {
+    const r = ws(ctx, sheet).getRange(address);
+    r.load("address,values"); await ctx.sync();
+    if (style === "checkbox" && apiOK("1.18")) {
+      const other = r.values.flat().filter(v => v !== "" && typeof v !== "boolean").length;
+      if (other && !overwrite) throw new Error(`${r.address} has ${other} cells with other values; checkboxes hold TRUE/FALSE. Ask before replacing them, then call again with overwrite: true.`);
+      r.values = r.values.map(row => row.map(v => typeof v === "boolean" ? v : !!checked));
+      r.control = { type: "Checkbox" };
+      await ctx.sync();
+      return { added: "checkbox", address: r.address };
+    }
+    // ✓/✗ بقائمة وألوان: بيشتغل بكل نسخ إكسل، وهو البديل لمربّعات الصح بالنسخ الأقدم
+    const dv = r.dataValidation;
+    dv.clear();
+    dv.rule = { list: { inCellDropDown: true, source: "✓,✗" } };
+    for (const [mark, fg, bg] of [["✓", "#107C41", "#E6F4EA"], ["✗", "#C0392B", "#FDECEA"]]) {
+      const c = r.conditionalFormats.add("CellValue").cellValue;
+      c.format.font.color = fg; c.format.font.bold = true; c.format.fill.color = bg;
+      c.rule = { formula1: `="${mark}"`, operator: "EqualTo" };
+    }
+    r.format.horizontalAlignment = "Center";
+    await ctx.sync();
+    return { added: "tick_cross", address: r.address,
+      ...(style === "checkbox" ? { note: "This Excel has no in-cell checkboxes, so a ✓/✗ drop-down with colors was used instead." } : {}) };
+  }),
+
   create_pivot: ({ name, source_sheet, source_address, dest_sheet, dest_cell, rows, columns = [], values }) => Excel.run(async ctx => {
     const src = ctx.workbook.worksheets.getItem(source_sheet).getRange(source_address);
     const pt = ctx.workbook.pivotTables.add(name, src, ws(ctx, dest_sheet).getRange(dest_cell));
@@ -861,6 +1170,7 @@ function say(cls, text) {
   const paint = () => { if (cls === "ai") d.innerHTML = md(item.text); else d.textContent = item.text; };
   paint();
   $("chat").append(d); d.scrollIntoView({ block: "end" });
+  $("empty").hidden = true;
   UI.push(item);
   return { set(t) { item.text = t; paint(); } };
 }
@@ -1149,7 +1459,7 @@ async function chatSend() {
   if (!inExcel) say("err", "الصفحة مش داخل إكسل، فالأدوات ما رح تقدر توصل للملف.");
   $("ask").value = ""; attached = []; attachFiles([]);
   say("me", text + (files.length ? "\n📎 " + files.map(f => f.name || "صورة ملصوقة").join("، ") : ""));
-  $("send").disabled = true; $("stop").hidden = false; stopAsked = false;
+  $("send").hidden = true; $("stop").hidden = false; $("cstatus").classList.add("busy"); stopAsked = false;
   chatAbort = new AbortController();
   // فهرس الخزنة قبل مرفقات هالرسالة، عشان ما تنذكر مرّتين
   const ctx = ctxSent ? [] : [{ type: "text", text: vaultContext() }];
@@ -1175,7 +1485,7 @@ async function chatSend() {
     for (let step = 1; ; step++) {
       if (stopAsked) { say("step", "وقّفت بطلبك."); break; }
       if (step > MAX_STEPS) { say("err", `وصلت ${MAX_STEPS} خطوة ولسّا ما خلّصت — قلّي «كمّل» إذا بدّك أكمّل.`); break; }
-      $("cstatus").textContent = "بفكّر…";
+      $("cstatus").textContent = "بفكّر";
       const msg = await client.beta.messages.create(chatParams(c, CHAT), { signal: chatAbort.signal });
       const u = msg.usage || {};
       console.info("MaliAI usage", u);   // للتأكّد من الكاش: cache_read_input_tokens لازم يكبر نداء ورا نداء
@@ -1217,10 +1527,12 @@ async function chatSend() {
   }
   saveChat();
   $("cstatus").textContent = total ? `⚡ ${Math.round(cached / total * 100)}% من هالطلب انقرا من الكاش (${cached.toLocaleString("en")} من ${total.toLocaleString("en")} توكن)` : "";
-  $("send").disabled = false; $("stop").hidden = true;
+  $("cstatus").classList.remove("busy");
+  $("send").hidden = false; $("stop").hidden = true;
 }
 $("send").onclick = chatSend;
 $("ask").onkeydown = e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) chatSend(); };
+document.querySelectorAll(".sugg button").forEach(b => b.onclick = () => { $("ask").value = b.textContent; $("ask").focus(); });
 $("stop").onclick = () => { stopAsked = true; if (chatAbort) chatAbort.abort(); $("cstatus").textContent = "بوقّف…"; };
 $("newchat").onclick = () => {   // كبستين عشان ما تنمسح المحادثة بالغلط؛ الذاكرة الدائمة بتضلّ
   const b = $("newchat");
@@ -1230,12 +1542,146 @@ $("newchat").onclick = () => {   // كبستين عشان ما تنمسح الم
     return;
   }
   delete b.dataset.sure; b.textContent = "محادثة جديدة";
-  CHAT = []; UI = []; ctxSent = false; $("chat").innerHTML = ""; $("cstatus").textContent = "";
+  CHAT = []; UI = []; ctxSent = false; $("chat").innerHTML = ""; $("cstatus").textContent = ""; $("empty").hidden = false;
   saveChat();
 };
 
+// =====================================================================
+// تسجيل صوتي: المايك ← ملف صوت ← نصّ بمحرّك قويّ بالعربي، وبينحطّ بمربّع الطلب تراجعه وتبعته
+// =====================================================================
+const MAX_REC = 300;   // ponytail: أطول تسجيل 5 دقايق
+const BARS = 36;
+const TERMS = ["ضريبة المبيعات", "فاتورة", "دينار", "فلس", "مورّد", "قيد", "ميزان مراجعة", "كشف حساب", "شيت", "عمود", "صفّ", "Excel"];
+let rec = null;
+const setC = (t, busy = false) => { $("cstatus").textContent = t; $("cstatus").classList.toggle("busy", busy); };
+$("meter").innerHTML = "<i></i>".repeat(BARS);
+
+// أسماء الشيتات وملاحظات الذاكرة بتساعد المحرّك يكتب الأسماء والمصطلحات صحّ
+async function voiceHints() {
+  const out = [...TERMS, ...[...VAULT.keys()].filter(p => p.startsWith(MEM_DIR)).map(title)];
+  if (inExcel) try {
+    await Excel.run(async ctx => { const s = ctx.workbook.worksheets; s.load("items/name"); await ctx.sync(); out.push(...s.items.map(x => x.name)); });
+  } catch (e) {}
+  return [...new Set(out.map(s => String(s).trim()).filter(s => s && s.length <= 40))].slice(0, 40);
+}
+
+async function transcribe(blob, c) {
+  const hints = await voiceHints(), ext = /ogg/.test(blob.type) ? "ogg" : /mp4/.test(blob.type) ? "mp4" : "webm";
+  const send = withHints => {
+    const fd = new FormData(), file = new File([blob], "voice." + ext, { type: blob.type || "audio/webm" });
+    if (c.voice === "openai" || c.voice === "groq") {
+      fd.append("model", c.voice === "groq" ? "whisper-large-v3" : "gpt-4o-transcribe");
+      fd.append("language", "ar");
+      fd.append("file", file);
+      if (withHints) fd.append("prompt", ("محاسب أردني بيحكي عن شيت إكسل: " + hints.join("، ")).slice(0, 600));
+      return fetch(c.voice === "groq" ? "https://api.groq.com/openai/v1/audio/transcriptions" : "https://api.openai.com/v1/audio/transcriptions",
+        { method: "POST", headers: { Authorization: "Bearer " + c.voiceKey }, body: fd });
+    }
+    fd.append("model_id", "scribe_v2");
+    fd.append("language_code", "ar");
+    fd.append("tag_audio_events", "false");
+    fd.append("file", file);
+    if (withHints) hints.forEach(h => fd.append("keyterms", h));
+    return fetch("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": c.voiceKey }, body: fd });
+  };
+  let r = await send(true);
+  if (r.status === 400 || r.status === 422) r = await send(false);   // إذا رفض الكلمات المساعدة، بنعيد بدونها
+  if (r.status === 401 || r.status === 403) throw new Error("مفتاح الصوت مرفوض، صلّحه من الإعدادات");
+  if (r.status === 429) throw new Error("وصلت حدّ محرّك الصوت، استنّى شوي وجرّب");
+  let j = null; try { j = JSON.parse(await r.text()); } catch (e) {}
+  if (!r.ok) {
+    const d = j && (j.error && j.error.message || j.detail && (j.detail.message || JSON.stringify(j.detail)));
+    throw new Error("محرّك الصوت: " + (d || "خطأ " + r.status));
+  }
+  return String(j && j.text || "").trim();
+}
+
+async function micStream() {
+  // إكسل على النت بيطلب إذن المايك أوّل مرّة، وبعد أوّل موافقة لازم اللوحة تعيد تحميل
+  if (inExcel && Office.context.platform === Office.PlatformType.OfficeOnline && Office.devicePermission) {
+    if (await Office.devicePermission.requestPermissions([Office.DevicePermissionType.microphone])) {
+      try { sessionStorage.setItem("maliai.mic", "1"); } catch (e) {}
+      location.reload();
+      return null;
+    }
+  }
+  return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+}
+
+function setRecUI(on) {
+  $("composer").classList.toggle("rec", on);
+  $("recbar").hidden = !on;
+  $("mic").setAttribute("aria-pressed", on);
+  $("mic").setAttribute("aria-label", on ? "خلّصت، حوّل لنصّ" : "سجّل صوتك");
+  $("send").disabled = on; $("attach").disabled = on;
+  if (on) $("rectime").textContent = "0:00";
+}
+
+async function startRec() {
+  const c = readCfg();
+  if (!c.voiceKey) { $("settings").open = true; $("vkey").focus(); setC("حط مفتاح الصوت بالإعدادات تحت «التسجيل الصوتي» واحفظ أوّل."); return; }
+  let stream;
+  try { if (!(stream = await micStream())) return; }
+  catch (e) {
+    setC(e.name === "NotAllowedError" || /denied/i.test(e.message) ? "ما في إذن للمايك. اسمحله من إعدادات إكسل أو المتصفّح وجرّب كمان."
+      : e.name === "NotFoundError" ? "ما لقيت مايك موصول بالجهاز." : "ما قدرت أشغّل المايك: " + (e.message || e));
+    return;
+  }
+  const type = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"].find(t => MediaRecorder.isTypeSupported(t));
+  const mr = new MediaRecorder(stream, type ? { mimeType: type } : undefined), chunks = [];
+  mr.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  const ac = new AudioContext(), an = ac.createAnalyser();
+  an.fftSize = 512;
+  ac.createMediaStreamSource(stream).connect(an);
+  const buf = new Uint8Array(an.fftSize), bars = [...$("meter").children], lv = new Array(BARS).fill(0);
+  rec = { mr, stream, ac, chunks, t0: Date.now() };
+  const tick = () => {
+    if (!rec) return;
+    an.getByteTimeDomainData(buf);
+    let peak = 0;
+    for (const v of buf) peak = Math.max(peak, Math.abs(v - 128));
+    lv.push(Math.min(1, peak / 60)); lv.shift();
+    bars.forEach((b, i) => { b.style.transform = `scaleY(${0.12 + lv[i] * 0.88})`; });
+    const s = Math.floor((Date.now() - rec.t0) / 1000);
+    $("rectime").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    if (s >= MAX_REC) stopRec(); else rec.raf = requestAnimationFrame(tick);
+  };
+  mr.start(250);
+  setRecUI(true); setC("");
+  tick();
+}
+
+function stopRec(cancel = false) {
+  if (!rec) return;
+  const r = rec;
+  rec = null;
+  cancelAnimationFrame(r.raf);
+  r.mr.onstop = async () => {
+    r.stream.getTracks().forEach(t => t.stop());
+    r.ac.close().catch(() => {});
+    setRecUI(false);
+    if (cancel || !r.chunks.length) { setC(cancel ? "انلغى التسجيل." : ""); return; }
+    $("mic").disabled = true;
+    setC("بحوّل صوتك لنصّ", true);
+    try {
+      const text = await transcribe(new Blob(r.chunks, { type: r.mr.mimeType || "audio/webm" }), readCfg());
+      if (!text) { setC("ما سمعت كلام واضح، جرّب كمان مرّة."); return; }
+      const a = $("ask");
+      a.value = (a.value.trim() ? a.value.trim() + " " : "") + text;
+      a.focus();
+      setC("✓ تحوّل صوتك لنصّ. راجعه وابعت.");
+    } catch (e) { setC(e.message || String(e)); }
+    finally { $("mic").disabled = false; }
+  };
+  r.mr.stop();
+}
+$("mic").onclick = () => rec ? stopRec() : startRec();
+$("reccancel").onclick = () => stopRec(true);
+document.addEventListener("keydown", e => { if (e.key === "Escape" && rec) stopRec(true); });
+try { if (sessionStorage.getItem("maliai.mic")) { sessionStorage.removeItem("maliai.mic"); setC("صار في إذن للمايك. اكبس 🎙 واحكي."); } } catch (e) {}
+
 function showTab(chat) {
-  $("tab-chat").hidden = !chat; $("tab-inv").hidden = chat;
+  $("tab-chat").hidden = !chat; $("tab-inv").hidden = chat; $("newchat").hidden = !chat;
   $("t-chat").setAttribute("aria-selected", chat); $("t-inv").setAttribute("aria-selected", !chat);
   if (chat) $("ask").focus();
 }
