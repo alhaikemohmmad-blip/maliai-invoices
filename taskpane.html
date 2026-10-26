@@ -90,15 +90,13 @@ ul{ list-style:none; padding:0; margin:10px 0; }
 #send svg{ transform:scaleX(-1); }
 #stop{ padding:6px 12px; border:1px solid var(--err); background:transparent; color:var(--err); font-weight:600; }
 
-/* التسجيل: أعمدة رفيعة بتتحرّك مع الصوت بدل مربّع الكتابة */
+/* التسجيل: الكلام بينكتب بالمربّع وإنت بتحكي */
 #recbar{ display:flex; align-items:center; gap:8px; height:52px; padding:0 12px; }
 #recbar[hidden]{ display:none; }
 #recbar .dot{ width:9px; height:9px; border-radius:50%; background:var(--rec); animation:pulse 1.2s ease-in-out infinite; }
 #rectime{ min-width:34px; color:var(--rec); font-weight:600; }
-#meter{ flex:1; display:flex; align-items:center; gap:2px; height:30px; overflow:hidden; }
-#meter i{ flex:1; height:100%; border-radius:2px; background:var(--accent); transform:scaleY(.12); transition:transform 60ms linear; }
+#livehint{ flex:1; color:var(--fg2); font-size:12px; }
 .composer.rec{ border-color:var(--rec); }
-.composer.rec #ask{ display:none; }
 #mic[aria-pressed="true"]{ background:var(--rec); color:#fff; }
 @keyframes pulse{ 50%{ opacity:.25; } }
 
@@ -149,14 +147,14 @@ legend{ padding:0 6px; font-size:12.5px; font-weight:600; }
     <textarea id="ask" rows="2" placeholder="اكتب طلبك، أو اكبس المايك واحكي"></textarea>
     <div id="recbar" hidden>
       <span class="dot" aria-hidden="true"></span><span id="rectime">0:00</span>
-      <div id="meter" aria-hidden="true"></div>
+      <span id="livehint">بسمعك… والكلام بينكتب فوق</span>
       <button id="reccancel" class="ghost" type="button">إلغاء</button>
     </div>
     <div class="tools">
       <button id="attach" class="icon" type="button" aria-label="أرفق ملف" title="أرفق إكسل أو PDF أو فواتير (أو اسحبها أو الصقها هون). بينقرا مرّة وحدة وبينحفظ بالخزنة">
         <svg viewBox="0 0 24 24"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/></svg>
       </button>
-      <button id="mic" class="icon" type="button" aria-label="سجّل صوتك" aria-pressed="false" title="سجّل صوتك. اكبس كمان لمّا تخلّص، وEsc للإلغاء">
+      <button id="mic" class="icon" type="button" aria-label="احكي بدل ما تكتب" aria-pressed="false" title="احكي بدل ما تكتب (مجّاني). اكبس كمان لمّا تخلّص، وEsc للإلغاء">
         <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
       </button>
       <span class="grow"></span>
@@ -200,12 +198,7 @@ legend{ padding:0 6px; font-size:12.5px; font-weight:600; }
     <label for="url">الرابط</label><input id="url" dir="ltr">
     <label for="key">المفتاح</label><input id="key" type="password" dir="ltr" autocomplete="off">
   </fieldset>
-  <fieldset>
-    <legend>التسجيل الصوتي</legend>
-    <label for="vprov">محرّك تحويل الصوت لنصّ</label><select id="vprov"></select>
-    <label for="vkey">مفتاح الصوت</label><input id="vkey" type="password" dir="ltr" autocomplete="off">
-  </fieldset>
-  <small>المفاتيح بتنحفظ على جهازك بس، مش بكود الصفحة.</small>
+  <small>المفتاح بينحفظ على جهازك بس، مش بكود الصفحة. الكتابة بالصوت مجّانية وما بدها مفتاح.</small>
   <button id="save" type="button">احفظ</button>
 </details>
 <script>
@@ -214,12 +207,6 @@ const PROVIDERS = {
   anthropic:  { label: "Anthropic Claude (مفتاح من console.anthropic.com)", url: "https://api.anthropic.com", model: "claude-opus-5-5" },
   openrouter: { label: "OpenRouter", url: "https://openrouter.ai/api/v1", model: "google/gemini-2.5-flash" },
   custom:     { label: "مخصّص (صيغة OpenAI)", url: "", model: "" }
-};
-// محرّكات تحويل الصوت لنصّ، كل واحد بمفتاحه
-const VOICES = {
-  elevenlabs: "ElevenLabs Scribe v2 (الأقوى بالعربي والأرقام، مفتاح من elevenlabs.io)",
-  openai:     "OpenAI gpt-4o-transcribe (مفتاح من platform.openai.com)",
-  groq:       "Groq Whisper large v3 (سريع، وفيه استعمال مجاني من console.groq.com)"
 };
 const CFG_KEY = "maliai.invoices.cfg";
 const MAX_SIDE = 1600;    // أكبر ضلع للصورة المرسلة: أصغر = أسرع رفع
@@ -277,9 +264,6 @@ function fillCfg() {
   $("url").value = c.url || PROVIDERS[p].url;
   $("model").value = c.model || PROVIDERS[p].model;
   $("key").value = c.key || "";
-  $("vprov").innerHTML = Object.entries(VOICES).map(([k, v]) => `<option value="${k}">${v}</option>`).join("");
-  $("vprov").value = c.voice || "elevenlabs";
-  $("vkey").value = c.voiceKey || "";
   if (!c.key) $("settings").open = true;
 }
 $("prov").onchange = () => {
@@ -287,8 +271,7 @@ $("prov").onchange = () => {
   if (p.url) { $("url").value = p.url; $("model").value = p.model; }
 };
 $("save").onclick = () => {
-  const c = { provider: $("prov").value, url: $("url").value.trim(), model: $("model").value.trim(), key: $("key").value.trim(),
-    voice: $("vprov").value, voiceKey: $("vkey").value.trim() };
+  const c = { provider: $("prov").value, url: $("url").value.trim(), model: $("model").value.trim(), key: $("key").value.trim() };
   try { localStorage.setItem(CFG_KEY, JSON.stringify(c)); setStatus("انحفظت الإعدادات."); } catch (e) { setStatus("ما قدرت أحفظ الإعدادات بهالجهاز."); }
   if (c.key) $("settings").open = false;
 };
@@ -1547,133 +1530,77 @@ $("newchat").onclick = () => {   // كبستين عشان ما تنمسح الم
 };
 
 // =====================================================================
-// تسجيل صوتي: المايك ← ملف صوت ← نصّ بمحرّك قويّ بالعربي، وبينحطّ بمربّع الطلب تراجعه وتبعته
+// كتابة بالصوت مجّاناً: تفريغ المتصفّح نفسه، بدون مفتاح ولا مصاري، والكلام بينكتب بمربّع الطلب وإنت بتحكي
 // =====================================================================
 const MAX_REC = 300;   // ponytail: أطول تسجيل 5 دقايق
-const BARS = 36;
-const TERMS = ["ضريبة المبيعات", "فاتورة", "دينار", "فلس", "مورّد", "قيد", "ميزان مراجعة", "كشف حساب", "شيت", "عمود", "صفّ", "Excel"];
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null;
 const setC = (t, busy = false) => { $("cstatus").textContent = t; $("cstatus").classList.toggle("busy", busy); };
-$("meter").innerHTML = "<i></i>".repeat(BARS);
 
-// أسماء الشيتات وملاحظات الذاكرة بتساعد المحرّك يكتب الأسماء والمصطلحات صحّ
-async function voiceHints() {
-  const out = [...TERMS, ...[...VAULT.keys()].filter(p => p.startsWith(MEM_DIR)).map(title)];
-  if (inExcel) try {
-    await Excel.run(async ctx => { const s = ctx.workbook.worksheets; s.load("items/name"); await ctx.sync(); out.push(...s.items.map(x => x.name)); });
-  } catch (e) {}
-  return [...new Set(out.map(s => String(s).trim()).filter(s => s && s.length <= 40))].slice(0, 40);
-}
-
-async function transcribe(blob, c) {
-  const hints = await voiceHints(), ext = /ogg/.test(blob.type) ? "ogg" : /mp4/.test(blob.type) ? "mp4" : "webm";
-  const send = withHints => {
-    const fd = new FormData(), file = new File([blob], "voice." + ext, { type: blob.type || "audio/webm" });
-    if (c.voice === "openai" || c.voice === "groq") {
-      fd.append("model", c.voice === "groq" ? "whisper-large-v3" : "gpt-4o-transcribe");
-      fd.append("language", "ar");
-      fd.append("file", file);
-      if (withHints) fd.append("prompt", ("محاسب أردني بيحكي عن شيت إكسل: " + hints.join("، ")).slice(0, 600));
-      return fetch(c.voice === "groq" ? "https://api.groq.com/openai/v1/audio/transcriptions" : "https://api.openai.com/v1/audio/transcriptions",
-        { method: "POST", headers: { Authorization: "Bearer " + c.voiceKey }, body: fd });
-    }
-    fd.append("model_id", "scribe_v2");
-    fd.append("language_code", "ar");
-    fd.append("tag_audio_events", "false");
-    fd.append("file", file);
-    if (withHints) hints.forEach(h => fd.append("keyterms", h));
-    return fetch("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": c.voiceKey }, body: fd });
-  };
-  let r = await send(true);
-  if (r.status === 400 || r.status === 422) r = await send(false);   // إذا رفض الكلمات المساعدة، بنعيد بدونها
-  if (r.status === 401 || r.status === 403) throw new Error("مفتاح الصوت مرفوض، صلّحه من الإعدادات");
-  if (r.status === 429) throw new Error("وصلت حدّ محرّك الصوت، استنّى شوي وجرّب");
-  let j = null; try { j = JSON.parse(await r.text()); } catch (e) {}
-  if (!r.ok) {
-    const d = j && (j.error && j.error.message || j.detail && (j.detail.message || JSON.stringify(j.detail)));
-    throw new Error("محرّك الصوت: " + (d || "خطأ " + r.status));
-  }
-  return String(j && j.text || "").trim();
-}
-
-async function micStream() {
-  // إكسل على النت بيطلب إذن المايك أوّل مرّة، وبعد أوّل موافقة لازم اللوحة تعيد تحميل
+// إكسل على النت بيطلب إذن المايك أوّل مرّة، وبعد أوّل موافقة لازم اللوحة تعيد تحميل
+async function micAllowed() {
   if (inExcel && Office.context.platform === Office.PlatformType.OfficeOnline && Office.devicePermission) {
     if (await Office.devicePermission.requestPermissions([Office.DevicePermissionType.microphone])) {
       try { sessionStorage.setItem("maliai.mic", "1"); } catch (e) {}
       location.reload();
-      return null;
+      return false;
     }
   }
-  return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  return true;
 }
 
 function setRecUI(on) {
   $("composer").classList.toggle("rec", on);
   $("recbar").hidden = !on;
+  $("ask").readOnly = on;
   $("mic").setAttribute("aria-pressed", on);
-  $("mic").setAttribute("aria-label", on ? "خلّصت، حوّل لنصّ" : "سجّل صوتك");
+  $("mic").setAttribute("aria-label", on ? "خلّصت" : "احكي بدل ما تكتب");
   $("send").disabled = on; $("attach").disabled = on;
   if (on) $("rectime").textContent = "0:00";
 }
 
 async function startRec() {
-  const c = readCfg();
-  if (!c.voiceKey) { $("settings").open = true; $("vkey").focus(); setC("حط مفتاح الصوت بالإعدادات تحت «التسجيل الصوتي» واحفظ أوّل."); return; }
-  let stream;
-  try { if (!(stream = await micStream())) return; }
-  catch (e) {
-    setC(e.name === "NotAllowedError" || /denied/i.test(e.message) ? "ما في إذن للمايك. اسمحله من إعدادات إكسل أو المتصفّح وجرّب كمان."
-      : e.name === "NotFoundError" ? "ما لقيت مايك موصول بالجهاز." : "ما قدرت أشغّل المايك: " + (e.message || e));
-    return;
-  }
-  const type = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"].find(t => MediaRecorder.isTypeSupported(t));
-  const mr = new MediaRecorder(stream, type ? { mimeType: type } : undefined), chunks = [];
-  mr.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-  const ac = new AudioContext(), an = ac.createAnalyser();
-  an.fftSize = 512;
-  ac.createMediaStreamSource(stream).connect(an);
-  const buf = new Uint8Array(an.fftSize), bars = [...$("meter").children], lv = new Array(BARS).fill(0);
-  rec = { mr, stream, ac, chunks, t0: Date.now() };
-  const tick = () => {
-    if (!rec) return;
-    an.getByteTimeDomainData(buf);
-    let peak = 0;
-    for (const v of buf) peak = Math.max(peak, Math.abs(v - 128));
-    lv.push(Math.min(1, peak / 60)); lv.shift();
-    bars.forEach((b, i) => { b.style.transform = `scaleY(${0.12 + lv[i] * 0.88})`; });
-    const s = Math.floor((Date.now() - rec.t0) / 1000);
-    $("rectime").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-    if (s >= MAX_REC) stopRec(); else rec.raf = requestAnimationFrame(tick);
+  if (!SR) { setC("هون ما في كتابة بالصوت من المتصفّح. اكبس بمربّع الكتابة واضغط Win + H، ويندوز بيكتب كلامك مجّاناً."); return; }
+  try { if (!(await micAllowed())) return; }
+  catch (e) { setC("ما في إذن للمايك. اسمحله من إعدادات إكسل أو المتصفّح وجرّب كمان."); return; }
+  const sr = new SR(), a = $("ask"), base = a.value.trim(), me = { sr, t0: Date.now(), cancel: false };
+  let final = "", err = "";
+  sr.lang = "ar-JO"; sr.continuous = true; sr.interimResults = true;
+  sr.onresult = e => {
+    let interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) final += e.results[i][0].transcript + " "; else interim += e.results[i][0].transcript;
+    }
+    a.value = [base, (final + interim).trim()].filter(Boolean).join(" ");
   };
-  mr.start(250);
+  sr.onerror = e => { err = e.error; };
+  sr.onend = () => {
+    if (rec === me) rec = null;
+    clearInterval(me.timer);
+    setRecUI(false);
+    if (me.cancel) { a.value = base; setC("انلغى التسجيل."); return; }
+    a.value = [base, final.trim()].filter(Boolean).join(" ");
+    if (err === "not-allowed" || err === "service-not-allowed") setC("ما في إذن للمايك. اسمحله من إعدادات المتصفّح، أو استعمل Win + H.");
+    else if (err === "network") setC("الكتابة بالصوت بدها نت. تأكّد من الاتصال وجرّب.");
+    else if (!final.trim()) setC("ما سمعت كلام واضح، جرّب كمان مرّة.");
+    else { a.focus(); setC("✓ انكتب كلامك. راجعه وابعت."); }
+  };
+  me.timer = setInterval(() => {
+    const s = Math.floor((Date.now() - me.t0) / 1000);
+    $("rectime").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    if (s >= MAX_REC) stopRec();
+  }, 250);
+  rec = me;
+  sr.start();
   setRecUI(true); setC("");
-  tick();
 }
 
 function stopRec(cancel = false) {
   if (!rec) return;
   const r = rec;
   rec = null;
-  cancelAnimationFrame(r.raf);
-  r.mr.onstop = async () => {
-    r.stream.getTracks().forEach(t => t.stop());
-    r.ac.close().catch(() => {});
-    setRecUI(false);
-    if (cancel || !r.chunks.length) { setC(cancel ? "انلغى التسجيل." : ""); return; }
-    $("mic").disabled = true;
-    setC("بحوّل صوتك لنصّ", true);
-    try {
-      const text = await transcribe(new Blob(r.chunks, { type: r.mr.mimeType || "audio/webm" }), readCfg());
-      if (!text) { setC("ما سمعت كلام واضح، جرّب كمان مرّة."); return; }
-      const a = $("ask");
-      a.value = (a.value.trim() ? a.value.trim() + " " : "") + text;
-      a.focus();
-      setC("✓ تحوّل صوتك لنصّ. راجعه وابعت.");
-    } catch (e) { setC(e.message || String(e)); }
-    finally { $("mic").disabled = false; }
-  };
-  r.mr.stop();
+  r.cancel = cancel;
+  if (cancel) r.sr.abort(); else r.sr.stop();
 }
 $("mic").onclick = () => rec ? stopRec() : startRec();
 $("reccancel").onclick = () => stopRec(true);
