@@ -1563,25 +1563,47 @@ async function startRec() {
   if (!SR) { setC("هون ما في كتابة بالصوت من المتصفّح. اكبس بمربّع الكتابة واضغط Win + H، ويندوز بيكتب كلامك مجّاناً."); return; }
   try { if (!(await micAllowed())) return; }
   catch (e) { setC("ما في إذن للمايك. اسمحله من إعدادات إكسل أو المتصفّح وجرّب كمان."); return; }
-  const sr = new SR(), a = $("ask"), base = a.value.trim(), me = { sr, t0: Date.now(), cancel: false };
+  const sr = new SR(), a = $("ask"), base = a.value.trim();
+  const me = { sr, t0: Date.now(), started: Date.now(), quick: 0, langs: ["ar-JO", "ar-SA", "ar"], done: false, cancel: false };
   let final = "", err = "";
-  sr.lang = "ar-JO"; sr.continuous = true; sr.interimResults = true;
+  sr.lang = me.langs.shift(); sr.continuous = true; sr.interimResults = true;
   sr.onresult = e => {
     let interim = "";
     for (let i = e.resultIndex; i < e.results.length; i++) {
       if (e.results[i].isFinal) final += e.results[i][0].transcript + " "; else interim += e.results[i][0].transcript;
     }
+    me.heard = true;
     a.value = [base, (final + interim).trim()].filter(Boolean).join(" ");
   };
   sr.onerror = e => { err = e.error; };
   sr.onend = () => {
+    // المتصفّح بيوقف التفريغ لحاله بعد سكتة أو انقطاع: بنرجّع نشغّله لحدّ ما المحاسب يكبس «خلّصت»
+    if (!me.done) {
+      if (err === "language-not-supported" && me.langs.length) { sr.lang = me.langs.shift(); err = ""; }
+      const quickEnd = Date.now() - me.started < 1500 && !me.heard;
+      me.quick = quickEnd ? me.quick + 1 : 0;
+      const fatal = ["not-allowed", "service-not-allowed", "network", "audio-capture", "language-not-supported"].includes(err);
+      if (!fatal && me.quick < 3 && Date.now() - me.t0 < MAX_REC * 1000) {
+        err = ""; me.heard = false; me.started = Date.now();
+        try { sr.start(); return; } catch (e) {}
+      }
+      if (!err && me.quick >= 3) err = "ends-at-once";
+    }
     if (rec === me) rec = null;
     clearInterval(me.timer);
     setRecUI(false);
     if (me.cancel) { a.value = base; setC("انلغى التسجيل."); return; }
     a.value = [base, final.trim()].filter(Boolean).join(" ");
-    if (err === "not-allowed" || err === "service-not-allowed") setC("ما في إذن للمايك. اسمحله من إعدادات المتصفّح، أو استعمل Win + H.");
-    else if (err === "network") setC("الكتابة بالصوت بدها نت. تأكّد من الاتصال وجرّب.");
+    const winH = " اكبس بمربّع الكتابة واضغط Win + H، وويندوز بيكتب كلامك مجّاناً.";
+    const why = {
+      "not-allowed": "إكسل أو ويندوز مانعين المايك عن الإضافة.",
+      "service-not-allowed": "خدمة الكتابة بالصوت مسكّرة بهالإكسل.",
+      "network": "خدمة الكتابة بالصوت المجّانية مش واصلة من إكسل الكمبيوتر.",
+      "language-not-supported": "خدمة الكتابة بالصوت هون ما بتدعم العربي.",
+      "ends-at-once": "الكتابة بالصوت بتوقف لحالها بهالإكسل.",
+      "audio-capture": "ما في صوت واصل من المايك. تأكّد إنّ مايك السمّاعة هو المختار بإعدادات الصوت بويندوز، أو"
+    }[err];
+    if (why) setC(`${why}${winH} (${err})`);
     else if (!final.trim()) setC("ما سمعت كلام واضح، جرّب كمان مرّة.");
     else { a.focus(); setC("✓ انكتب كلامك. راجعه وابعت."); }
   };
@@ -1599,7 +1621,7 @@ function stopRec(cancel = false) {
   if (!rec) return;
   const r = rec;
   rec = null;
-  r.cancel = cancel;
+  r.done = true; r.cancel = cancel;
   if (cancel) r.sr.abort(); else r.sr.stop();
 }
 $("mic").onclick = () => rec ? stopRec() : startRec();
