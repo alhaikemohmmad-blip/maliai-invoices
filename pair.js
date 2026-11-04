@@ -82,3 +82,33 @@ const MaliPair = (() => {
   }
   return { newSecret, derive, seal, open, relay, post, listen };
 })();
+
+// تفريغ Google (كروم وأندرويد) بيرجّع الجملة كلّها من أوّلها مع كل كلمة جديدة («يعطيك» ← «يعطيك العافية»)،
+// وبيعيد آخر جملة لمّا يرجع يشتغل بعد السكتة. فمنبني النصّ من جديد مع كل نتيجة، وما منلزّق المكرّر
+const MaliSpeech = (() => {
+  const clean = s => String(s || "").replace(/\s+/g, " ").trim();
+  // نصّ الجلسة من كل نتائجها: نتيجة بتبدأ بالّي قبلها (أو العكس) هي نفس الجملة بس أطول، فمنخلّي الأطول
+  function session(results) {
+    const segs = [];
+    for (let i = 0; i < results.length; i++) {
+      const t = clean(results[i][0] && results[i][0].transcript);
+      if (!t) continue;
+      const last = segs[segs.length - 1];
+      if (last !== undefined && (t.startsWith(last) || last.startsWith(t))) segs[segs.length - 1] = t.length >= last.length ? t : last;
+      else segs.push(t);
+    }
+    return segs.join(" ");
+  }
+  // جلسة جديدة على النصّ المحفوظ بدون تكرار آخره، ولو أوّلها نفس آخر كلمات المحفوظ منشيل التداخل
+  function join(done, add) {
+    done = clean(done); add = clean(add);
+    if (!add) return done;
+    if (!done) return add;
+    if (done.endsWith(add)) return done;
+    const d = done.split(" "), w = add.split(" ");
+    for (let k = Math.min(d.length, w.length); k > 0; k--)
+      if (d.slice(-k).join(" ") === w.slice(0, k).join(" ")) return clean(done + " " + w.slice(k).join(" "));
+    return done + " " + add;
+  }
+  return { session, join };
+})();

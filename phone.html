@@ -90,7 +90,7 @@ const NO_PC = "انبعت، بس الكمبيوتر ما ردّ. تأكّد إن
 })();
 
 $("send").onclick = async () => {
-  if (rec) rec.stop();
+  stopMic();
   const text = $("text").value.trim();
   if (!text || !link) return;
   $("send").disabled = true;
@@ -109,21 +109,30 @@ $("clear").onclick = () => { $("text").value = ""; $("text").focus(); };
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null;
 if (!SR) { $("mic").hidden = true; $("hint").textContent = "اكبس 🎤 بلوحة المفاتيح واحكي، وبعدين «ابعت للكمبيوتر»."; }
+const stopMic = () => { if (rec) { rec.stopped = true; rec.sr.stop(); } };
 $("mic").onclick = () => {
-  if (rec) { rec.stop(); return; }
-  const r = rec = new SR(), base = $("text").value.trim();
-  let final = "";
-  r.lang = "ar-JO"; r.continuous = true; r.interimResults = true;
-  r.onresult = e => {
-    let interim = "";
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      if (e.results[i].isFinal) final += e.results[i][0].transcript + " "; else interim += e.results[i][0].transcript;
+  if (rec) { stopMic(); return; }
+  const sr = new SR(), base = $("text").value.trim();
+  const me = rec = { sr, stopped: false, done: "", cur: "", quick: 0, started: Date.now(), heard: false };
+  const show = () => { $("text").value = [base, MaliSpeech.join(me.done, me.cur)].filter(Boolean).join(" "); };
+  sr.lang = "ar-JO"; sr.continuous = true; sr.interimResults = true;
+  // النصّ بينبني من جديد مع كل نتيجة (أندرويد بيرجّع الجملة كلّها كل مرّة)، فما بيتكرّر
+  sr.onresult = e => { me.cur = MaliSpeech.session(e.results); me.heard = true; show(); };
+  sr.onerror = e => {
+    if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+      me.stopped = true;
+      say("التلفون مانع المايك عن الصفحة. اسمحله من إعدادات المتصفّح، أو استعمل 🎤 بلوحة المفاتيح.", "bad");
     }
-    $("text").value = [base, (final + interim).trim()].filter(Boolean).join(" ");
   };
-  r.onerror = e => { if (e.error === "not-allowed") say("التلفون مانع المايك عن الصفحة. اسمحله من إعدادات المتصفّح، أو استعمل 🎤 بلوحة المفاتيح.", "bad"); };
-  r.onend = () => { rec = null; $("mic").setAttribute("aria-pressed", "false"); $("text").value = [base, final.trim()].filter(Boolean).join(" "); };
-  r.start();
+  sr.onend = () => {
+    me.done = MaliSpeech.join(me.done, me.cur); me.cur = ""; show();
+    // التلفون بيوقف بعد كل سكتة: منرجّع نسمع لحدّ ما تكبس المايك (إلّا إذا بيسكّر فوراً كل مرّة)
+    me.quick = Date.now() - me.started < 1500 && !me.heard ? me.quick + 1 : 0;
+    if (!me.stopped && me.quick < 3) { me.heard = false; me.started = Date.now(); try { sr.start(); return; } catch (x) {} }
+    if (rec === me) rec = null;
+    $("mic").setAttribute("aria-pressed", "false");
+  };
+  sr.start();
   $("mic").setAttribute("aria-pressed", "true");
 };
 </script>

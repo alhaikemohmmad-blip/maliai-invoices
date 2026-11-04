@@ -1692,18 +1692,17 @@ async function startRec() {
 function startLive() {
   const sr = new SR(), a = $("ask"), base = a.value.trim();
   const me = { sr, t0: Date.now(), started: Date.now(), quick: 0, langs: ["ar-JO", "ar-SA", "ar"], done: false, cancel: false };
-  let final = "", err = "";
+  let done = "", cur = "", err = "";   // done: الجلسات اللي خلصت، cur: الجلسة هلّق (بتنبني من جديد مع كل نتيجة)
   sr.lang = me.langs.shift(); sr.continuous = true; sr.interimResults = true;
   sr.onresult = e => {
-    let interim = "";
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      if (e.results[i].isFinal) final += e.results[i][0].transcript + " "; else interim += e.results[i][0].transcript;
-    }
+    cur = MaliSpeech.session(e.results);
     me.heard = true;
-    a.value = [base, (final + interim).trim()].filter(Boolean).join(" ");
+    a.value = [base, MaliSpeech.join(done, cur)].filter(Boolean).join(" ");
   };
   sr.onerror = e => { err = e.error; };
   sr.onend = () => {
+    done = MaliSpeech.join(done, cur); cur = "";
+    const final = done;
     // بيوقف لحاله بعد سكتة: بنرجّع نشغّله لحدّ ما المحاسب يكبس «خلّصت»
     if (!me.done) {
       if (err === "language-not-supported" && me.langs.length) { sr.lang = me.langs.shift(); err = ""; }
