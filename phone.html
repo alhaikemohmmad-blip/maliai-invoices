@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#107c41">
+<title>MaliAI · احكي للكمبيوتر</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="pair.js"></script>
+<style>
+:root{ --bg:#ffffff; --bg2:#f3f6f4; --fg:#18201b; --fg2:#5b6660; --line:#dde3df; --accent:#107c41; --accent2:#0d6435; --tint:#e6f3eb; --err:#c0392b; --rec:#d23a2a; }
+@media (prefers-color-scheme: dark){ :root{ --bg:#161b18; --bg2:#202722; --fg:#e8eee9; --fg2:#a0aca5; --line:#343d37; --accent:#2ea866; --accent2:#3cc078; --tint:#1c3326; --err:#ff7b6b; --rec:#ff6a5a; } }
+*{ box-sizing:border-box; }
+html, body{ height:100%; }
+body{ margin:0; padding:16px 16px calc(16px + env(safe-area-inset-bottom)); background:var(--bg); color:var(--fg);
+  font:16px/1.6 "IBM Plex Sans Arabic","Segoe UI",Tahoma,sans-serif; display:flex; flex-direction:column; gap:12px; }
+header{ display:flex; align-items:baseline; gap:8px; }
+header b{ font-size:19px; color:var(--accent); }
+header span{ color:var(--fg2); font-size:14px; }
+#state{ margin:0; padding:8px 12px; border-radius:10px; background:var(--bg2); color:var(--fg2); font-size:14px; }
+#state.on{ background:var(--tint); color:var(--accent); font-weight:600; }
+#state.bad{ color:var(--err); }
+textarea{ flex:1; min-height:160px; width:100%; padding:14px; border:1px solid var(--line); border-radius:14px; background:var(--bg); color:var(--fg); font:inherit; font-size:17px; resize:none; }
+textarea:focus{ outline:none; border-color:var(--accent); }
+.hint{ margin:0; color:var(--fg2); font-size:13px; text-align:center; }
+.bar{ display:flex; align-items:center; gap:12px; }
+button{ font:inherit; border:0; border-radius:14px; cursor:pointer; color:inherit; }
+button:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
+button:disabled{ opacity:.45; }
+#mic{ flex:none; width:72px; height:72px; border-radius:50%; background:var(--accent); color:#fff; display:grid; place-items:center; }
+#mic[aria-pressed="true"]{ background:var(--rec); animation:pulse 1.2s ease-in-out infinite; }
+#mic svg{ width:30px; height:30px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+#send{ flex:1; height:56px; background:var(--accent); color:#fff; font-weight:700; font-size:17px; }
+#clear{ flex:none; height:56px; padding:0 14px; background:var(--bg2); color:var(--fg2); }
+@keyframes pulse{ 50%{ box-shadow:0 0 0 10px color-mix(in srgb, var(--rec) 25%, transparent); } }
+@media (prefers-reduced-motion: reduce){ *{ animation:none !important; } }
+</style>
+</head>
+<body>
+<header><b>MaliAI</b><span>احكي، والكلام بيوصل لكمبيوترك</span></header>
+<p id="state" role="status" aria-live="polite">بربط مع الكمبيوتر…</p>
+<textarea id="text" placeholder="اكبس المايك واحكي، أو اكبس 🎤 بلوحة المفاتيح"></textarea>
+<p class="hint" id="hint">بعد ما تخلّص، اكبس «ابعت للكمبيوتر» والكلام بيطلع بمربّع الطلب هناك.</p>
+<div class="bar">
+  <button id="mic" type="button" aria-label="احكي" aria-pressed="false">
+    <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+  </button>
+  <button id="send" type="button">ابعت للكمبيوتر</button>
+  <button id="clear" type="button" aria-label="امسح النصّ">امسح</button>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const CHUNK = 1000;   // ponytail: الوسيط بياخد لحدّ 4 كيلوبايت بالرسالة، فالكلام الطويل بينبعت على دفعات
+const say = (t, cls = "") => { $("state").textContent = t; $("state").className = cls; };
+
+// الربط: السرّ وعنوان الوسيط بعد # بالرابط اللي بالـQR، وبينحفظوا على التلفون للمرّات الجاية
+const h = new URLSearchParams(location.hash.slice(1));
+let secret = h.get("k"), relay = h.get("r");
+try {
+  if (secret && relay) localStorage.setItem("maliai.phone", JSON.stringify({ secret, relay }));
+  else ({ secret, relay } = JSON.parse(localStorage.getItem("maliai.phone")) || {});
+} catch (e) {}
+let link = null;
+// كل رسالة إلها رقم، والكمبيوتر بيردّ «وصلني» بنفس الرقم: ✓ بس لمّا الكلام يوصل فعلاً
+const acks = {};
+const ACK_WAIT = 5000;
+async function post(obj) {
+  const n = crypto.getRandomValues(new Uint32Array(2)).join("-");
+  const got = new Promise(ok => { acks[n] = ok; setTimeout(() => { delete acks[n]; ok(false); }, ACK_WAIT); });
+  const r = await fetch(`${relay}/${link.topic}`, { method: "POST", body: await MaliPair.seal(link.key, { ...obj, n }) });
+  if (!r.ok) throw new Error("الوسيط ردّ " + r.status);
+  return got;
+}
+const NO_PC = "انبعت، بس الكمبيوتر ما ردّ. تأكّد إنّ إكسل فاتح وإنّ MaliAI مربوط بهالتلفون (إذا انعمل «ربط جديد» صوّر الرمز الجديد).";
+(async () => {
+  if (!secret || !relay) { say("الصفحة مش مربوطة. افتح MaliAI بالكمبيوتر، اكبس 📱 وصوّر الرمز.", "bad"); $("send").disabled = $("mic").disabled = true; return; }
+  try {
+    link = await MaliPair.derive(secret);
+    const src = new EventSource(`${relay}/${link.topic}/sse`);
+    src.onmessage = async e => {
+      try {
+        const m = JSON.parse(e.data);
+        if (m.event !== "message") return;
+        const p = await MaliPair.open(link.key, m.message);
+        if (p.ack && acks[p.ack]) { acks[p.ack](true); delete acks[p.ack]; }
+      } catch (x) {}
+    };
+    await new Promise(ok => { src.onopen = ok; setTimeout(ok, 3000); });
+    const ok = await post({ hello: true });
+    say(ok ? "✓ مربوط مع كمبيوترك" : NO_PC, ok ? "on" : "bad");
+  } catch (e) { say("ما قدرت أوصل للوسيط. تأكّد من النت وارجع افتح الصفحة.", "bad"); }
+})();
+
+$("send").onclick = async () => {
+  if (rec) rec.stop();
+  const text = $("text").value.trim();
+  if (!text || !link) return;
+  $("send").disabled = true;
+  say("ببعت…");
+  try {
+    let ok = true;
+    for (let i = 0; i < text.length; i += CHUNK) ok = (await post({ text: text.slice(i, i + CHUNK) })) && ok;
+    if (ok) { $("text").value = ""; say("✓ وصل للكمبيوتر. راجعه هناك وابعت.", "on"); }
+    else say(NO_PC, "bad");
+  } catch (e) { say("ما وصل: " + (e.message || e) + ". جرّب كمان مرّة.", "bad"); }
+  finally { $("send").disabled = false; }
+};
+$("clear").onclick = () => { $("text").value = ""; $("text").focus(); };
+
+// مايك التلفون: تفريغ المتصفّح نفسه (مجّاني)، والكلام بينكتب وإنت بتحكي
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null;
+if (!SR) { $("mic").hidden = true; $("hint").textContent = "اكبس 🎤 بلوحة المفاتيح واحكي، وبعدين «ابعت للكمبيوتر»."; }
+$("mic").onclick = () => {
+  if (rec) { rec.stop(); return; }
+  const r = rec = new SR(), base = $("text").value.trim();
+  let final = "";
+  r.lang = "ar-JO"; r.continuous = true; r.interimResults = true;
+  r.onresult = e => {
+    let interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) final += e.results[i][0].transcript + " "; else interim += e.results[i][0].transcript;
+    }
+    $("text").value = [base, (final + interim).trim()].filter(Boolean).join(" ");
+  };
+  r.onerror = e => { if (e.error === "not-allowed") say("التلفون مانع المايك عن الصفحة. اسمحله من إعدادات المتصفّح، أو استعمل 🎤 بلوحة المفاتيح.", "bad"); };
+  r.onend = () => { rec = null; $("mic").setAttribute("aria-pressed", "false"); $("text").value = [base, final.trim()].filter(Boolean).join(" "); };
+  r.start();
+  $("mic").setAttribute("aria-pressed", "true");
+};
+</script>
+</body>
+</html>

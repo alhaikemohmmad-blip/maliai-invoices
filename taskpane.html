@@ -6,6 +6,7 @@
 <title>MaliAI — تفريغ الفواتير</title>
 <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="pair.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -105,6 +106,17 @@ ul{ list-style:none; padding:0; margin:10px 0; }
 @keyframes dots{ 0%{ content:""; } 25%{ content:"."; } 50%{ content:".."; } 75%{ content:"..."; } }
 @media (prefers-reduced-motion: reduce){ *{ animation:none !important; transition:none !important; } }
 
+/* 📱 ربط التلفون: QR على ورقة بيضاء (الكاميرات بتقرأه أسرع)، وجنبه الشرح والحالة */
+#pairbox{ margin-top:8px; padding:12px; border:1px solid var(--line); border-radius:var(--radius); background:var(--bg2); }
+#pairbox[hidden]{ display:none; }
+#pairbox .qr{ display:grid; place-items:center; width:180px; margin:0 auto 8px; padding:8px; border-radius:8px; background:#fff; }
+#pairbox .qr svg{ width:100%; height:auto; display:block; }
+#pairbox p{ margin:0 0 6px; font-size:12.5px; color:var(--fg2); text-align:center; }
+#pairstate{ font-weight:600; color:var(--fg) !important; }
+#pairstate.on{ color:var(--accent) !important; }
+#pairbox .row{ justify-content:center; }
+#phone[aria-expanded="true"]{ background:var(--tint); color:var(--accent); }
+
 /* الخزنة والإعدادات */
 details{ margin-top:12px; border-top:1px solid var(--line); padding-top:8px; }
 summary{ cursor:pointer; color:var(--fg2); font-size:13px; }
@@ -157,9 +169,22 @@ legend{ padding:0 6px; font-size:12.5px; font-weight:600; }
       <button id="mic" class="icon" type="button" aria-label="احكي بدل ما تكتب" aria-pressed="false" title="احكي بدل ما تكتب (مجّاني). اكبس كمان لمّا تخلّص، وEsc للإلغاء">
         <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
       </button>
+      <button id="phone" class="icon" type="button" aria-label="احكي من التلفون" aria-expanded="false" title="احكي من تلفونك، والكلام بيوصل هون">
+        <svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>
+      </button>
       <span class="grow"></span>
       <button id="stop" type="button" hidden>وقّف</button>
       <button id="send" type="button">ابعت <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+    </div>
+  </div>
+  <div id="pairbox" hidden>
+    <div class="qr" id="qr"></div>
+    <p>صوّر الرمز بكاميرا تلفونك، فبتفتح صفحة مربوطة بهالكمبيوتر. احكي فيها والكلام بيوصل لمربّع الطلب.</p>
+    <p>ضيف الصفحة على الشاشة الرئيسية بالتلفون عشان ما تصوّر كل مرّة.</p>
+    <p id="pairstate" role="status" aria-live="polite">بستنّى التلفون…</p>
+    <div class="row">
+      <button id="pairnew" class="ghost" type="button" title="بيفصل أيّ تلفون مربوط قبل، وبيطلّع رمز جديد">ربط جديد</button>
+      <button id="paircopy" class="ghost" type="button">انسخ الرابط</button>
     </div>
   </div>
   <input id="cfiles" type="file" multiple hidden>
@@ -197,6 +222,8 @@ legend{ padding:0 6px; font-size:12.5px; font-weight:600; }
     <label for="model">النموذج</label><input id="model" dir="ltr">
     <label for="url">الرابط</label><input id="url" dir="ltr">
     <label for="key">المفتاح</label><input id="key" type="password" dir="ltr" autocomplete="off">
+    <label for="budget">حدّ الصرف بالشهر على هالجهاز (دولار)</label><input id="budget" type="number" min="1" step="1" dir="ltr" placeholder="50">
+    <small id="spendNow"></small>
   </fieldset>
   <small>المفتاح بينحفظ على جهازك بس، مش بكود الصفحة. الكتابة بالصوت مجّانية وما بدها مفتاح.</small>
   <button id="save" type="button">احفظ</button>
@@ -204,7 +231,7 @@ legend{ padding:0 6px; font-size:12.5px; font-weight:600; }
 <script>
 const PROVIDERS = {
   gemini:     { label: "Google Gemini (سريع، مفتاح مجاني من aistudio.google.com)", url: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-flash-latest" },
-  anthropic:  { label: "Anthropic Claude (مفتاح من console.anthropic.com)", url: "https://api.anthropic.com", model: "claude-opus-5-5" },
+  anthropic:  { label: "Anthropic Claude Sonnet 5.5 (مفتاح من console.anthropic.com)", url: "https://api.anthropic.com", model: "claude-sonnet-5-5" },
   openrouter: { label: "OpenRouter", url: "https://openrouter.ai/api/v1", model: "google/gemini-2.5-flash" },
   custom:     { label: "مخصّص (صيغة OpenAI)", url: "", model: "" }
 };
@@ -220,7 +247,8 @@ const LIBS = {
   mammoth: "https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js",
   heic:    "https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js",
   utif:    "https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.js",
-  jszip:   "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
+  jszip:   "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
+  qr:      "https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"
 };
 const ANTHROPIC_SDK = "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.131.0/+esm";
 
@@ -256,23 +284,83 @@ const queue = [];   // [{file, li}]
 let inExcel = false;
 
 // ---------- الإعدادات (على الجهاز فقط) ----------
-const readCfg = () => { try { return JSON.parse(localStorage.getItem(CFG_KEY)) || {}; } catch (e) { return {}; } };
+// النموذج ثابت عشان ميزانية الشهر تكفي: Sonnet 5.5 لكل الشغل، وOpus 5.5 بس لفاتورة أرقامها ما طابقت حتى بعد قراءتين
+const CLAUDE = "claude-sonnet-5-5", CLAUDE_STRONG = "claude-opus-5-5";
+const DEFAULT_BUDGET = 50;   // ponytail: ٢٠٠$ بالشهر ÷ ٤ موظفين؛ الحدّ اللي بيجمع كل الأجهزة بينحطّ من console.anthropic.com ← Limits
+const readCfg = () => {
+  let c = {};
+  try { c = JSON.parse(localStorage.getItem(CFG_KEY)) || {}; } catch (e) {}
+  if (c.provider === "anthropic") c.model = CLAUDE;   // حتى لو محفوظ نموذج ثاني من نسخة قديمة
+  if (!(c.budget > 0)) c.budget = DEFAULT_BUDGET;
+  return c;
+};
+const lockModel = p => { $("model").disabled = p === "anthropic"; if (p === "anthropic") $("model").value = CLAUDE; };
 function fillCfg() {
   const c = readCfg(), p = c.provider || "gemini";
   $("prov").innerHTML = Object.entries(PROVIDERS).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join("");
   $("prov").value = p;
   $("url").value = c.url || PROVIDERS[p].url;
   $("model").value = c.model || PROVIDERS[p].model;
+  lockModel(p);
   $("key").value = c.key || "";
+  $("budget").value = c.budget || "";
+  renderSpend();
   if (!c.key) $("settings").open = true;
 }
+
+// ---------- الصرف: كلفة كل طلب لـ Anthropic بالدولار، ومجموع الشهر على هالجهاز ----------
+// ponytail: أسعار Anthropic لكل مليون توكن (تشرين أوّل ٢٠٢٦): [أوّل اسم النموذج، إدخال، إخراج، قراءة من الكاش]؛ حدّثها إذا تغيّرت
+const PRICES = [
+  ["claude-fable-5-1", 10, 50, 0.25], ["claude-mythos-5-1", 10, 50, 0.25], ["claude-fable-5", 10, 50, 1], ["claude-mythos-5", 10, 50, 1],
+  ["claude-opus-5-5", 4, 20, 0.20], ["claude-opus", 5, 25, 0.50],
+  ["claude-sonnet-5", 2, 10, 0.20], ["claude-sonnet", 3, 15, 0.30],
+  ["claude-haiku-5", 0.10, 0.50, 0.01], ["claude-haiku", 1, 5, 0.10]
+];
+// كتابة الكاش: ١.٢٥ من سعر الإدخال لمدّة ٥ دقايق، و٢ لمدّة ساعة
+function costOf(model, u) {
+  const [, inp, out, read] = PRICES.find(([k]) => String(model || "").startsWith(k)) || PRICES[4];
+  const w1h = (u.cache_creation && u.cache_creation.ephemeral_1h_input_tokens) || 0;
+  const w5m = Math.max(0, (u.cache_creation_input_tokens || 0) - w1h);
+  return ((u.input_tokens || 0) * inp + (u.output_tokens || 0) * out + (u.cache_read_input_tokens || 0) * read + w5m * inp * 1.25 + w1h * inp * 2) / 1e6;
+}
+const SPEND_KEY = "maliai.spend";
+const thisMonth = () => new Date().toISOString().slice(0, 7);
+function readSpend() {
+  try { const s = JSON.parse(localStorage.getItem(SPEND_KEY)); if (s && s.month === thisMonth()) return s; } catch (e) {}
+  return { month: thisMonth(), usd: 0, requests: 0 };
+}
+function addSpend(model, u) {
+  const cost = costOf(model, u || {}), s = readSpend();
+  s.usd += cost; s.requests++;
+  try { localStorage.setItem(SPEND_KEY, JSON.stringify(s)); } catch (e) {}
+  renderSpend();
+  return cost;
+}
+const usd = n => n > 0 && n < 0.01 ? "أقلّ من $0.01" : "$" + n.toFixed(2);
+function renderSpend() {
+  const s = readSpend(), b = readCfg().budget;
+  $("spendNow").textContent = `صرفت هالشهر ${usd(s.usd)} على ${s.requests} طلب` + (b ? ` من حدّ ${usd(b)}` : "") +
+    ". هاد حساب الإضافة على هالجهاز، والرقم الرسمي بـ console.anthropic.com ← Usage.";
+}
+// قبل أيّ طلب: إذا المحاسب حاطط حدّ ووصله، منوقف هون بدل ما يتفاجأ إنّ الرصيد خلص
+function overBudget() {
+  const b = readCfg().budget, s = readSpend();
+  return b && s.usd >= b ? `وصلت حدّ الصرف اللي حطّيته لهالشهر (${usd(s.usd)} من ${usd(b)}). إذا بدّك تكمّل، زيد الحدّ من الإعدادات.` : "";
+}
+const budgetNote = () => { const b = readCfg().budget, s = readSpend(); return b && s.usd >= b * 0.8 ? ` · ⚠️ قرّبت من حدّ الصرف (${usd(s.usd)} من ${usd(b)})` : ""; };
+const NO_CREDIT = "خلص رصيد Anthropic، فما قدرت أكمّل. اشحن من console.anthropic.com ← Billing (وإذا بدّك ما يوقف فجأة مرّة ثانية فعّل Auto reload من نفس الصفحة)، وبعدها اكتبلي «كمّل» وبكمّل من مكان ما وقفت.";
+const creditOut = e => /credit balance|purchase credits|billing/i.test(String(e && e.message || e));
 $("prov").onchange = () => {
   const p = PROVIDERS[$("prov").value];
   if (p.url) { $("url").value = p.url; $("model").value = p.model; }
+  lockModel($("prov").value);
 };
 $("save").onclick = () => {
-  const c = { provider: $("prov").value, url: $("url").value.trim(), model: $("model").value.trim(), key: $("key").value.trim() };
+  const b = parseFloat($("budget").value);
+  const c = { provider: $("prov").value, url: $("url").value.trim(), model: $("model").value.trim(), key: $("key").value.trim(),
+    budget: b > 0 ? b : DEFAULT_BUDGET };
   try { localStorage.setItem(CFG_KEY, JSON.stringify(c)); setStatus("انحفظت الإعدادات."); } catch (e) { setStatus("ما قدرت أحفظ الإعدادات بهالجهاز."); }
+  renderSpend();
   if (c.key) $("settings").open = false;
 };
 
@@ -404,10 +492,12 @@ async function askClaude(images, prompt, c, signal) {
         { type: "text", text: prompt }
       ] }]
     }, { signal });
+    addSpend(msg.model || c.model, msg.usage);
     if (msg.stop_reason === "refusal") throw new Error("Claude رفض يقرأ هالملف");
     return msg.content.filter(b => b.type === "text").map(b => b.text).join("");
   } catch (e) {
     if (e instanceof Anthropic.APIUserAbortError) throw new Error("اتوقّف");
+    if (creditOut(e)) throw new Error(NO_CREDIT);
     if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) throw new Error("المفتاح مرفوض — صلّحه من الإعدادات");
     if (e instanceof Anthropic.NotFoundError) throw new Error("اسم النموذج غلط — صلّحه من الإعدادات");
     if (e instanceof Anthropic.RateLimitError) throw new Error("وصلت حدّ Anthropic، استنّى دقيقة وجرّب");
@@ -535,6 +625,7 @@ $("stopInv").onclick = () => { if (invAbort) invAbort.abort(); setStatus("بوق
 async function run() {
   const c = readCfg();
   if (!c.key || !c.url || !c.model) { $("settings").open = true; setStatus("حط المفتاح بالإعدادات واحفظ أوّل."); return; }
+  if (c.provider === "anthropic" && overBudget()) { setStatus(overBudget()); return; }
   const jobs = queue.slice();
   $("go").disabled = true; $("stopInv").hidden = false;
   invAbort = new AbortController();
@@ -561,10 +652,18 @@ async function run() {
           const problems = mathIssues(inv);
           if (problems.length) {   // الأرقام ما زبطت: قراءة ثانية مركّزة قبل ما نطلّعها
             st.textContent = "الأرقام ما زبطت، بدقّق مرّة ثانية…";
-            const again = await extract(parts, c, RECHECK(inv, problems), signal).catch(e => { if (signal.aborted) throw e; return null; });
-            const left = again ? mathIssues(again) : problems;
-            if (again && left.length < problems.length) { inv = again; notes.push(left.length ? "انعادت قراءتها، ولسّا في فرق" : "انعادت قراءتها وصارت الأرقام تطابق"); }
-            else notes.push("انعادت قراءتها والأرقام لسّا ما بتطابق — راجع الأصل");
+            const first = inv, retry = (cfg, from, issues) => extract(parts, cfg, RECHECK(from, issues), signal).catch(e => { if (signal.aborted) throw e; return null; });
+            let left = problems, strong = false;
+            const again = await retry(c, inv, problems);
+            if (again && mathIssues(again).length < left.length) { inv = again; left = mathIssues(again); }
+            // نادر جدّاً: لسّا ما طابقت بعد قراءتين ← قراءة أخيرة وحدة بالنموذج الأقوى
+            if (left.length && c.provider === "anthropic") {
+              st.textContent = "لسّا في فرق، بقرأها بالنموذج الأقوى…";
+              const third = await retry({ ...c, model: CLAUDE_STRONG }, inv, left);
+              if (third && mathIssues(third).length < left.length) { inv = third; left = mathIssues(third); strong = true; }
+            }
+            notes.push(!left.length ? "انعادت قراءتها وصارت الأرقام تطابق" : inv !== first ? "انعادت قراءتها، ولسّا في فرق" : "انعادت قراءتها والأرقام لسّا ما بتطابق — راجع الأصل");
+            if (strong) notes.push("انقرت بالنموذج الأقوى");
           }
           const before = sameInvoiceBefore(inv, hash);
           if (before) notes.push(`نفس المورّد ورقم الفاتورة انفرّغوا قبل من «${before.name}» (${day(before.at)}) — ممكن مكرّرة`);
@@ -575,6 +674,7 @@ async function run() {
       } catch (e) {
         li.className = "err";
         st.textContent = "✗ " + (signal.aborted ? "اتوقّف" : (e.message || e));
+        if (e.message === NO_CREDIT) { setStatus(NO_CREDIT); invAbort.abort(); }   // باقي الفواتير رح تفشل كمان، فمنوقف
       }
     }
   }));
@@ -1439,6 +1539,7 @@ async function chatSend() {
   if (!text) return;
   const c = readCfg();
   if (c.provider !== "anthropic" || !c.key) { $("settings").open = true; say("err", "مساعد إكسل بيشتغل مع Claude: اختار Anthropic من الإعدادات وحط المفتاح."); return; }
+  if (overBudget()) { say("err", overBudget()); return; }
   if (!inExcel) say("err", "الصفحة مش داخل إكسل، فالأدوات ما رح تقدر توصل للملف.");
   $("ask").value = ""; attached = []; attachFiles([]);
   say("me", text + (files.length ? "\n📎 " + files.map(f => f.name || "صورة ملصوقة").join("، ") : ""));
@@ -1461,7 +1562,7 @@ async function chatSend() {
   if (last && last.role === "user") last.content.push(...note); else CHAT.push({ role: "user", content: note });
   ctxSent = true;
   saveChat();
-  let Anthropic = null, cached = 0, total = 0;
+  let Anthropic = null, cached = 0, total = 0, spent = 0;
   try {
     ({ default: Anthropic } = await import(ANTHROPIC_SDK));
     const client = new Anthropic({ apiKey: c.key, baseURL: c.url || undefined, dangerouslyAllowBrowser: true });
@@ -1472,6 +1573,7 @@ async function chatSend() {
       const msg = await client.beta.messages.create(chatParams(c, CHAT), { signal: chatAbort.signal });
       const u = msg.usage || {};
       console.info("MaliAI usage", u);   // للتأكّد من الكاش: cache_read_input_tokens لازم يكبر نداء ورا نداء
+      spent += addSpend(msg.model || c.model, u);
       cached += u.cache_read_input_tokens || 0;
       total += (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
       CHAT.push({ role: "assistant", content: msg.content });
@@ -1506,10 +1608,11 @@ async function chatSend() {
     else if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) m = "المفتاح مرفوض — صلّحه من الإعدادات";
     else if (e instanceof Anthropic.NotFoundError) m = "اسم النموذج غلط — صلّحه من الإعدادات";
     else if (e instanceof Anthropic.RateLimitError) m = "وصلت حدّ Anthropic، استنّى دقيقة وجرّب";
+    else if (creditOut(e)) m = NO_CREDIT;
     if (m) say("err", m); else say("step", "وقّفت بطلبك.");
   }
   saveChat();
-  $("cstatus").textContent = total ? `⚡ ${Math.round(cached / total * 100)}% من هالطلب انقرا من الكاش (${cached.toLocaleString("en")} من ${total.toLocaleString("en")} توكن)` : "";
+  $("cstatus").textContent = total ? `💰 هالطلب ${usd(spent)} · هالشهر ${usd(readSpend().usd)} · ⚡ ${Math.round(cached / total * 100)}% من الكاش${budgetNote()}` : "";
   $("cstatus").classList.remove("busy");
   $("send").hidden = false; $("stop").hidden = true;
 }
@@ -1530,12 +1633,22 @@ $("newchat").onclick = () => {   // كبستين عشان ما تنمسح الم
 };
 
 // =====================================================================
-// كتابة بالصوت مجّاناً: تفريغ المتصفّح نفسه، بدون مفتاح ولا مصاري، والكلام بينكتب بمربّع الطلب وإنت بتحكي
+// كتابة بالصوت مجّاناً بدون مفتاح:
+// ١) تفريغ المتصفّح (فوري، والكلام بينكتب وإنت بتحكي) إذا موجود وشغّال
+// ٢) وإلّا Whisper على جهاز المحاسب نفسه (transformers.js): بينزل مرّة وحدة وبعدها بيشتغل بدون نت
 // =====================================================================
 const MAX_REC = 300;   // ponytail: أطول تسجيل 5 دقايق
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const SR_OFF = "maliai.sr.off";   // إذا تفريغ المتصفّح فشل مرّة بهالجهاز، ما بنرجع نجرّبه
+const ASR_LIB = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1";
+// مع كرت شاشة (WebGPU): large-v3-turbo، أدقّ بكثير بالعربي والأرقام (~560 ميجا مرّة وحدة)؛ بدونه: small على المعالج (~250 ميجا)
+const ASR_GPU = { model: "onnx-community/whisper-large-v3-turbo", dtype: { encoder_model: "q4f16", decoder_model_merged: "q4f16" }, size: "٥٦٠" };
+const ASR_CPU = { model: "onnx-community/whisper-small", dtype: "q8", size: "٢٥٠" };
+const JUNK = /نانسي قنقر|اشترك(وا)? (في|ب)القناة|لا تنسوا الاشتراك|شكرا للمشاهدة/;   // جمل بيألّفها Whisper لمّا الصوت فاضي
 let rec = null;
 const setC = (t, busy = false) => { $("cstatus").textContent = t; $("cstatus").classList.toggle("busy", busy); };
+const winH = " اكبس بمربّع الكتابة واضغط Win + H، وويندوز بيكتب كلامك مجّاناً.";
+const srOff = () => { try { return !!localStorage.getItem(SR_OFF); } catch (e) { return false; } };
 
 // إكسل على النت بيطلب إذن المايك أوّل مرّة، وبعد أوّل موافقة لازم اللوحة تعيد تحميل
 async function micAllowed() {
@@ -1549,20 +1662,30 @@ async function micAllowed() {
   return true;
 }
 
-function setRecUI(on) {
+function setRecUI(on, hint) {
   $("composer").classList.toggle("rec", on);
   $("recbar").hidden = !on;
   $("ask").readOnly = on;
   $("mic").setAttribute("aria-pressed", on);
   $("mic").setAttribute("aria-label", on ? "خلّصت" : "احكي بدل ما تكتب");
   $("send").disabled = on; $("attach").disabled = on;
+  if (hint) $("livehint").textContent = hint;
   if (on) $("rectime").textContent = "0:00";
 }
+const runTimer = me => setInterval(() => {
+  const s = Math.floor((Date.now() - me.t0) / 1000);
+  $("rectime").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  if (s >= MAX_REC) stopRec();
+}, 250);
 
 async function startRec() {
-  if (!SR) { setC("هون ما في كتابة بالصوت من المتصفّح. اكبس بمربّع الكتابة واضغط Win + H، ويندوز بيكتب كلامك مجّاناً."); return; }
   try { if (!(await micAllowed())) return; }
-  catch (e) { setC("ما في إذن للمايك. اسمحله من إعدادات إكسل أو المتصفّح وجرّب كمان."); return; }
+  catch (e) { setC("إكسل مانع المايك عن الإضافة." + winH); return; }
+  if (SR && !srOff()) startLive(); else startLocal();
+}
+
+// ---------- ١) تفريغ المتصفّح ----------
+function startLive() {
   const sr = new SR(), a = $("ask"), base = a.value.trim();
   const me = { sr, t0: Date.now(), started: Date.now(), quick: 0, langs: ["ar-JO", "ar-SA", "ar"], done: false, cancel: false };
   let final = "", err = "";
@@ -1577,7 +1700,7 @@ async function startRec() {
   };
   sr.onerror = e => { err = e.error; };
   sr.onend = () => {
-    // المتصفّح بيوقف التفريغ لحاله بعد سكتة أو انقطاع: بنرجّع نشغّله لحدّ ما المحاسب يكبس «خلّصت»
+    // بيوقف لحاله بعد سكتة: بنرجّع نشغّله لحدّ ما المحاسب يكبس «خلّصت»
     if (!me.done) {
       if (err === "language-not-supported" && me.langs.length) { sr.lang = me.langs.shift(); err = ""; }
       const quickEnd = Date.now() - me.started < 1500 && !me.heard;
@@ -1594,27 +1717,128 @@ async function startRec() {
     setRecUI(false);
     if (me.cancel) { a.value = base; setC("انلغى التسجيل."); return; }
     a.value = [base, final.trim()].filter(Boolean).join(" ");
-    const winH = " اكبس بمربّع الكتابة واضغط Win + H، وويندوز بيكتب كلامك مجّاناً.";
-    const why = {
-      "not-allowed": "إكسل أو ويندوز مانعين المايك عن الإضافة.",
-      "service-not-allowed": "خدمة الكتابة بالصوت مسكّرة بهالإكسل.",
-      "network": "خدمة الكتابة بالصوت المجّانية مش واصلة من إكسل الكمبيوتر.",
-      "language-not-supported": "خدمة الكتابة بالصوت هون ما بتدعم العربي.",
-      "ends-at-once": "الكتابة بالصوت بتوقف لحالها بهالإكسل.",
-      "audio-capture": "ما في صوت واصل من المايك. تأكّد إنّ مايك السمّاعة هو المختار بإعدادات الصوت بويندوز، أو"
-    }[err];
-    if (why) setC(`${why}${winH} (${err})`);
-    else if (!final.trim()) setC("ما سمعت كلام واضح، جرّب كمان مرّة.");
+    // تفريغ المتصفّح مش شغّال هون (زي إكسل الكمبيوتر): من هلّق Whisper على الجهاز
+    if (err && err !== "no-speech" && err !== "aborted" && !final.trim()) {
+      try { localStorage.setItem(SR_OFF, err); } catch (e) {}
+      setC(`تفريغ المتصفّح مش شغّال هون (${err})، بشغّلك محرّك الصوت اللي على جهازك.`);
+      startLocal();
+      return;
+    }
+    if (!final.trim()) setC("ما سمعت كلام واضح، جرّب كمان مرّة.");
     else { a.focus(); setC("✓ انكتب كلامك. راجعه وابعت."); }
   };
-  me.timer = setInterval(() => {
-    const s = Math.floor((Date.now() - me.t0) / 1000);
-    $("rectime").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-    if (s >= MAX_REC) stopRec();
-  }, 250);
+  me.timer = runTimer(me);
   rec = me;
   sr.start();
-  setRecUI(true); setC("");
+  setRecUI(true, "بسمعك… والكلام بينكتب فوق"); setC("");
+}
+
+// ---------- ٢) Whisper على الجهاز، بـ Worker عشان اللوحة ما تعلق وهو بيشتغل ----------
+const ASR_WORKER = `
+import { pipeline } from "${ASR_LIB}";
+let asr = null, cpuOnly = false;
+const progress_callback = p => { if (p.status === "progress") self.postMessage({ type: "progress", file: p.file, loaded: p.loaded, total: p.total }); };
+const GPU = ${JSON.stringify(ASR_GPU)}, CPU = ${JSON.stringify(ASR_CPU)};
+async function make(useGpu) {
+  const m = useGpu ? GPU : CPU;
+  self.postMessage({ type: "plan", size: m.size, gpu: useGpu });
+  return pipeline("automatic-speech-recognition", m.model, { device: useGpu ? "webgpu" : "wasm", dtype: m.dtype, progress_callback });
+}
+function load() {
+  if (!asr) asr = (async () => {
+    const hasGpu = !cpuOnly && !!(self.navigator.gpu && await self.navigator.gpu.requestAdapter().catch(() => null));
+    if (hasGpu) try { return await make(true); } catch (e) {}
+    return make(false);
+  })();
+  return asr;
+}
+const opts = { language: "arabic", task: "transcribe", chunk_length_s: 30, stride_length_s: 5 };
+self.onmessage = async ({ data }) => {
+  if (data.cpu) cpuOnly = true;
+  try {
+    const t = await load();
+    if (!data.audio) return self.postMessage({ id: data.id, type: "done" });
+    const out = await t(data.audio, opts);
+    self.postMessage({ id: data.id, type: "done", text: out.text });
+  } catch (e) { self.postMessage({ id: data.id, type: "error", message: String(e && e.message || e) }); }
+};`;
+// كرت الشاشة ممكن «يعلّق» (بيخرب المحرّك كلّه): بنفتح محرّك جديد، وإذا علّق كمان مرّة بنكمّل على المعالج
+let asrWorker = null, asrSeq = 0, asrSize = "٢٥٠", asrCpu = false, asrUsedGpu = false;
+const asrJobs = {}, asrFiles = {};
+const DL = "بنزّل محرّك الصوت لجهازك";
+async function whisper(audio) {
+  for (let tries = 0; ; tries++) {
+    try { return await whisperOnce(audio); }
+    catch (e) {
+      if (!asrUsedGpu || tries >= 2) throw e;
+      if (asrWorker) asrWorker.terminate();
+      asrWorker = null;
+      if (tries >= 1) asrCpu = true;
+    }
+  }
+}
+function whisperOnce(audio) {
+  if (!asrWorker) {
+    asrUsedGpu = false;
+    asrWorker = new Worker(URL.createObjectURL(new Blob([ASR_WORKER], { type: "text/javascript" })), { type: "module" });
+    asrWorker.onmessage = ({ data: m }) => {
+      if (m.type === "plan") { asrSize = m.size; asrUsedGpu = asrUsedGpu || m.gpu; return; }
+      if (m.type === "progress") {
+        asrFiles[m.file] = m;
+        const f = Object.values(asrFiles), pct = Math.floor(100 * f.reduce((a, x) => a + (x.loaded || 0), 0) / Math.max(1, f.reduce((a, x) => a + (x.total || 0), 0)));
+        if (pct < 100) setC(`${DL}، مرّة وحدة بس (حوالي ${asrSize} ميجا): ${pct}%`, true);
+        return;
+      }
+      if ($("cstatus").textContent.startsWith(DL)) setC("");   // خلص التنزيل
+      const j = asrJobs[m.id];
+      delete asrJobs[m.id];
+      if (j) m.type === "error" ? j.bad(new Error(m.message)) : j.ok(m.text || "");
+    };
+    asrWorker.onerror = e => { for (const k in asrJobs) { asrJobs[k].bad(new Error(e.message || "محرّك الصوت ما اشتغل")); delete asrJobs[k]; } asrWorker = null; };
+  }
+  const id = ++asrSeq;
+  return new Promise((ok, bad) => { asrJobs[id] = { ok, bad }; asrWorker.postMessage({ id, audio, cpu: asrCpu }); });
+}
+// Whisper بياخد صوت 16kHz قناة وحدة
+async function toPcm16k(blob) {
+  const ac = new AudioContext({ sampleRate: 16000 });
+  try { return (await ac.decodeAudioData(await blob.arrayBuffer())).getChannelData(0); } finally { ac.close().catch(() => {}); }
+}
+
+async function startLocal() {
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
+  catch (e) {
+    setC((e.name === "NotFoundError" ? "ما لقيت مايك. تأكّد إنّ مايك السمّاعة هو المختار بإعدادات الصوت بويندوز، أو"
+      : "إكسل مانع المايك عن الإضافات بهالجهاز، وما في مكتبة بتقدر تتخطّى هاد.") + winH + ` (${e.name})`);
+    return;
+  }
+  whisper(null).catch(() => {});   // بيبلّش ينزّل المحرّك وإنت بتحكي
+  const mr = new MediaRecorder(stream), chunks = [], a = $("ask");
+  const me = { mr, t0: Date.now(), cancel: false };
+  mr.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  mr.onstop = async () => {
+    stream.getTracks().forEach(t => t.stop());
+    clearInterval(me.timer);
+    if (rec === me) rec = null;
+    setRecUI(false);
+    if (me.cancel || !chunks.length) { setC(me.cancel ? "انلغى التسجيل." : ""); return; }
+    $("mic").disabled = true;
+    try {
+      const audio = await toPcm16k(new Blob(chunks, { type: mr.mimeType }));
+      setC("بحوّل صوتك لنصّ على جهازك", true);
+      const text = (await whisper(audio)).trim();
+      if (!text || JUNK.test(text)) { setC("ما سمعت كلام واضح، جرّب كمان مرّة."); return; }
+      a.value = [a.value.trim(), text].filter(Boolean).join(" ");
+      a.focus();
+      setC("✓ انكتب كلامك. راجعه وابعت.");
+    } catch (e) { setC("ما قدرت أحوّل الصوت لنصّ: " + (e.message || e)); }
+    finally { $("mic").disabled = false; }
+  };
+  me.timer = runTimer(me);
+  rec = me;
+  mr.start(250);
+  setRecUI(true, "بسمعك… اكبس المايك لمّا تخلّص"); setC("");
 }
 
 function stopRec(cancel = false) {
@@ -1622,12 +1846,85 @@ function stopRec(cancel = false) {
   const r = rec;
   rec = null;
   r.done = true; r.cancel = cancel;
-  if (cancel) r.sr.abort(); else r.sr.stop();
+  if (r.mr) r.mr.stop(); else if (cancel) r.sr.abort(); else r.sr.stop();
 }
 $("mic").onclick = () => rec ? stopRec() : startRec();
 $("reccancel").onclick = () => stopRec(true);
 document.addEventListener("keydown", e => { if (e.key === "Escape" && rec) stopRec(true); });
 try { if (sessionStorage.getItem("maliai.mic")) { sessionStorage.removeItem("maliai.mic"); setC("صار في إذن للمايك. اكبس 🎙 واحكي."); } } catch (e) {}
+
+// =====================================================================
+// 📱 الحكي من التلفون: QR بيربط تلفون الموظف بهالكمبيوتر بالزبط، والكلام بيوصل مشفّر عبر وسيطنا على أوراكل
+// =====================================================================
+const DEFAULT_RELAY = "";   // عنوان الوسيط (ntfy تبعنا) بينحطّ هون لمّا يجهز على أوراكل
+const RELAY = (() => { try { return localStorage.getItem("maliai.relay") || DEFAULT_RELAY; } catch (e) { return DEFAULT_RELAY; } })();
+const PAIR_KEY = "maliai.pair";
+let pairSrc = null;
+const seenPhone = new Set();
+function pairSecret(renew) {
+  let s = null;
+  try { s = localStorage.getItem(PAIR_KEY); } catch (e) {}
+  if (!s || renew) { s = MaliPair.newSecret(); try { localStorage.setItem(PAIR_KEY, s); } catch (e) {} }
+  return s;
+}
+// السرّ بعد # عشان المتصفّح ما يبعته لـ GitHub ولا لأيّ سيرفر
+const phoneUrl = s => location.href.split("#")[0].replace(/[^/]*$/, "phone.html") + "#k=" + s + "&r=" + encodeURIComponent(RELAY);
+const pairState = (t, on = false) => { $("pairstate").textContent = t; $("pairstate").classList.toggle("on", on); };
+
+async function listenPhone() {
+  if (!RELAY) return;
+  let s = null;
+  try { s = localStorage.getItem(PAIR_KEY); } catch (e) {}
+  if (!s) return;
+  if (pairSrc) pairSrc.close();
+  const { topic, key } = await MaliPair.derive(s);
+  const src = pairSrc = new EventSource(`${RELAY}/${topic}/sse`);
+  src.onmessage = async e => {
+    let m, p;
+    try { m = JSON.parse(e.data); } catch (x) { return; }
+    if (m.event !== "message" || seenPhone.has(m.id)) return;
+    seenPhone.add(m.id);
+    try { p = await MaliPair.open(key, m.message); } catch (x) { return; }   // مش من تلفوننا: بنتجاهله
+    if (p.ack) return;   // ردّنا إحنا
+    // بنردّ «وصلني» عشان التلفون ما يكتب ✓ إلّا لمّا الكلام يوصل فعلاً
+    if (p.n) MaliPair.seal(key, { ack: p.n }).then(b => fetch(`${RELAY}/${topic}`, { method: "POST", body: b })).catch(() => {});
+    if (p.hello) { pairState("✓ التلفون مربوط. احكي فيه والكلام بيوصل هون.", true); return; }
+    if (!p.text || !String(p.text).trim()) return;
+    const a = $("ask");
+    a.value = [a.value.trim(), String(p.text).trim()].filter(Boolean).join(" ");
+    showTab(true); a.focus();
+    pairState("✓ وصل كلام من التلفون.", true);
+    setC("📱 وصل كلامك من التلفون. راجعه وابعت.");
+  };
+  src.onerror = () => { if (src === pairSrc && !$("pairbox").hidden) pairState("الوسيط مش واصل هلّق، بحاول لحالي…"); };
+}
+
+async function showPair(renew) {
+  if (!RELAY) { pairState("الوسيط على السيرفر لسّا مش جاهز، فالحكي من التلفون لسّا مش شغّال."); return; }
+  const s = pairSecret(renew);
+  try {
+    await lib("qr");
+    const q = qrcode(0, "M");
+    q.addData(phoneUrl(s));
+    q.make();
+    $("qr").innerHTML = q.createSvgTag(4, 0);
+  } catch (e) { $("qr").textContent = "ما قدرت أرسم الرمز، استعمل «انسخ الرابط»."; }
+  if (renew) pairState("رمز جديد: التلفون القديم انفصل. صوّر الرمز من جديد.");
+  else if (!$("pairstate").classList.contains("on")) pairState("بستنّى التلفون…");
+  listenPhone();
+}
+$("phone").onclick = () => {
+  const open = $("pairbox").hidden;
+  $("pairbox").hidden = !open;
+  $("phone").setAttribute("aria-expanded", open);
+  if (open) showPair(false);
+};
+$("pairnew").onclick = () => showPair(true);
+$("paircopy").onclick = async () => {
+  try { await navigator.clipboard.writeText(phoneUrl(pairSecret(false))); pairState("✓ انتسخ الرابط. ابعته لتلفونك وافتحه هناك."); }
+  catch (e) { pairState("ما قدرت أنسخ، صوّر الرمز."); }
+};
+listenPhone();   // إذا التلفون مربوط من قبل، الكلام بيوصل حتى لو اللوحة مسكّرة
 
 function showTab(chat) {
   $("tab-chat").hidden = !chat; $("tab-inv").hidden = chat; $("newchat").hidden = !chat;
