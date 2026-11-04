@@ -59,35 +59,31 @@ const say = (t, cls = "") => { $("state").textContent = t; $("state").className 
 const h = new URLSearchParams(location.hash.slice(1));
 let secret = h.get("k"), relay = h.get("r");
 try {
-  if (secret && relay) localStorage.setItem("maliai.phone", JSON.stringify({ secret, relay }));
+  if (secret) localStorage.setItem("maliai.phone", JSON.stringify({ secret, relay }));
   else ({ secret, relay } = JSON.parse(localStorage.getItem("maliai.phone")) || {});
 } catch (e) {}
 let link = null;
 // كل رسالة إلها رقم، والكمبيوتر بيردّ «وصلني» بنفس الرقم: ✓ بس لمّا الكلام يوصل فعلاً
 const acks = {};
-const ACK_WAIT = 5000;
+const ACK_WAIT = 9000;   // الكمبيوتر بيسأل الوسيط كل ٣ ثواني، والتلفون كل ثانية ونص
 async function post(obj) {
   const n = crypto.getRandomValues(new Uint32Array(2)).join("-");
   const got = new Promise(ok => { acks[n] = ok; setTimeout(() => { delete acks[n]; ok(false); }, ACK_WAIT); });
-  const r = await fetch(`${relay}/${link.topic}`, { method: "POST", body: await MaliPair.seal(link.key, { ...obj, n }) });
-  if (!r.ok) throw new Error("الوسيط ردّ " + r.status);
+  await MaliPair.post(link.topic, await MaliPair.seal(link.key, { ...obj, n }), relay);
   return got;
 }
 const NO_PC = "انبعت، بس الكمبيوتر ما ردّ. تأكّد إنّ إكسل فاتح وإنّ MaliAI مربوط بهالتلفون (إذا انعمل «ربط جديد» صوّر الرمز الجديد).";
 (async () => {
-  if (!secret || !relay) { say("الصفحة مش مربوطة. افتح MaliAI بالكمبيوتر، اكبس 📱 وصوّر الرمز.", "bad"); $("send").disabled = $("mic").disabled = true; return; }
+  if (!secret) { say("الصفحة مش مربوطة. افتح MaliAI بالكمبيوتر، اكبس 📱 وصوّر الرمز.", "bad"); $("send").disabled = $("mic").disabled = true; return; }
   try {
     link = await MaliPair.derive(secret);
-    const src = new EventSource(`${relay}/${link.topic}/sse`);
-    src.onmessage = async e => {
+    MaliPair.listen(link.topic, async m => {
       try {
-        const m = JSON.parse(e.data);
-        if (m.event !== "message") return;
         const p = await MaliPair.open(link.key, m.message);
         if (p.ack && acks[p.ack]) { acks[p.ack](true); delete acks[p.ack]; }
       } catch (x) {}
-    };
-    await new Promise(ok => { src.onopen = ok; setTimeout(ok, 3000); });
+    }, relay, 1500);
+    await new Promise(ok => setTimeout(ok, 1600));   // أوّل سؤال للوسيط قبل ما نسلّم على الكمبيوتر
     const ok = await post({ hello: true });
     say(ok ? "✓ مربوط مع كمبيوترك" : NO_PC, ok ? "on" : "bad");
   } catch (e) { say("ما قدرت أوصل للوسيط. تأكّد من النت وارجع افتح الصفحة.", "bad"); }

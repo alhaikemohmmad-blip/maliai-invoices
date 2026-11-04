@@ -240,6 +240,7 @@ const MAX_SIDE = 1600;    // أكبر ضلع للصورة المرسلة: أصغ
 const MAX_PAGES = 3;      // ponytail: أوّل 3 صفحات من كل PDF/TIFF، زيدها إذا في فواتير أطول
 const MAX_TEXT = 60000;   // ponytail: أوّل 60 ألف حرف من الملفات النصّيّة (Excel/Word/XML)
 const PARALLEL = 4;       // فواتير بنفس الوقت، نزّلها إذا المزوّد بيرجّع 429
+const MAX_FILES = 5;      // حدّ إجباري: ٥ ملفات بالمرّة بتبويب الفواتير وبالرسالة الوحدة بالمساعد (بكل الطرق: زرّ، سحب، لصق)
 
 // قرّاء الصيغ الثانية بينحمّلوا بس لمّا ييجي ملف بيحتاجهم
 const LIBS = {
@@ -366,13 +367,16 @@ $("save").onclick = () => {
 
 // ---------- إضافة الملفات ----------
 function addFiles(files) {
+  let skipped = 0;
   for (const file of files) {
+    if (queue.length >= MAX_FILES) { skipped++; continue; }
     const li = document.createElement("li");
     li.innerHTML = `<span></span><span class="st">جاهزة</span>`;
     li.firstChild.textContent = file.name || "صورة ملصوقة";
     $("list").append(li);
     queue.push({ file, li });
   }
+  if (skipped) setStatus(`الحدّ ${MAX_FILES} ملفات بالمرّة، فما انضاف ${skipped}. فرّغ هدول أوّل وبعدين ضيف الباقي.`);
   $("go").disabled = !queue.length;
   $("clear").hidden = !queue.length;
 }
@@ -1447,17 +1451,17 @@ async function selectionNote() {
 }
 
 // ---------- مرفقات المحادثة ----------
-const MAX_ATTACH = 10;   // ponytail: أكثر من هيك استعمل تبويب «تفريغ الفواتير» (أسرع وأرخص للدفعات الكبيرة)
 let attached = [];
 function attachFiles(files) {
-  for (const f of files) if (attached.length < MAX_ATTACH) attached.push(f);
+  let skipped = 0;
+  for (const f of files) if (attached.length < MAX_FILES) attached.push(f); else skipped++;
   $("chips").hidden = !attached.length;
   $("chips").innerHTML = attached.length ? `📎 ${attached.length}: <span></span><button type="button" title="شيل المرفقات">✕</button>` : "";
   if (attached.length) {
     $("chips").querySelector("span").textContent = attached.map(f => f.name || "صورة ملصوقة").join("، ");
     $("chips").querySelector("button").onclick = () => { attached = []; attachFiles([]); };
   }
-  if (files.length && attached.length >= MAX_ATTACH) $("cstatus").textContent = `الحدّ ${MAX_ATTACH} ملفات بالرسالة — للدفعات الكبيرة استعمل «تفريغ الفواتير».`;
+  if (skipped) $("cstatus").textContent = `الحدّ ${MAX_FILES} ملفات بالرسالة، فما انضاف ${skipped}. ابعت هدول أوّل وبعدين ضيف الباقي.`;
 }
 $("attach").onclick = () => $("cfiles").click();
 $("cfiles").onchange = e => { attachFiles(e.target.files); e.target.value = ""; };
@@ -1856,10 +1860,9 @@ try { if (sessionStorage.getItem("maliai.mic")) { sessionStorage.removeItem("mal
 // =====================================================================
 // 📱 الحكي من التلفون: QR بيربط تلفون الموظف بهالكمبيوتر بالزبط، والكلام بيوصل مشفّر عبر وسيطنا على أوراكل
 // =====================================================================
-const DEFAULT_RELAY = "";   // عنوان الوسيط (ntfy تبعنا) بينحطّ هون لمّا يجهز على أوراكل
-const RELAY = (() => { try { return localStorage.getItem("maliai.relay") || DEFAULT_RELAY; } catch (e) { return DEFAULT_RELAY; } })();
+// عنوان الوسيط (TryCloudflare) بيتغيّر، فـ MaliPair.relay() بيلاقيه لحاله من relay.json اللي بيكتبه السيرفر
 const PAIR_KEY = "maliai.pair";
-let pairSrc = null;
+let stopPhone = null, relayHint = "";
 const seenPhone = new Set();
 function pairSecret(renew) {
   let s = null;
@@ -1868,26 +1871,23 @@ function pairSecret(renew) {
   return s;
 }
 // السرّ بعد # عشان المتصفّح ما يبعته لـ GitHub ولا لأيّ سيرفر
-const phoneUrl = s => location.href.split("#")[0].replace(/[^/]*$/, "phone.html") + "#k=" + s + "&r=" + encodeURIComponent(RELAY);
+const phoneUrl = s => location.href.split("#")[0].replace(/[^/]*$/, "phone.html") + "#k=" + s + (relayHint ? "&r=" + encodeURIComponent(relayHint) : "");
 const pairState = (t, on = false) => { $("pairstate").textContent = t; $("pairstate").classList.toggle("on", on); };
 
 async function listenPhone() {
-  if (!RELAY) return;
   let s = null;
   try { s = localStorage.getItem(PAIR_KEY); } catch (e) {}
   if (!s) return;
-  if (pairSrc) pairSrc.close();
+  if (stopPhone) stopPhone();
   const { topic, key } = await MaliPair.derive(s);
-  const src = pairSrc = new EventSource(`${RELAY}/${topic}/sse`);
-  src.onmessage = async e => {
-    let m, p;
-    try { m = JSON.parse(e.data); } catch (x) { return; }
-    if (m.event !== "message" || seenPhone.has(m.id)) return;
+  stopPhone = MaliPair.listen(topic, async m => {
+    if (seenPhone.has(m.id)) return;
     seenPhone.add(m.id);
+    let p;
     try { p = await MaliPair.open(key, m.message); } catch (x) { return; }   // مش من تلفوننا: بنتجاهله
     if (p.ack) return;   // ردّنا إحنا
     // بنردّ «وصلني» عشان التلفون ما يكتب ✓ إلّا لمّا الكلام يوصل فعلاً
-    if (p.n) MaliPair.seal(key, { ack: p.n }).then(b => fetch(`${RELAY}/${topic}`, { method: "POST", body: b })).catch(() => {});
+    if (p.n) MaliPair.seal(key, { ack: p.n }).then(b => MaliPair.post(topic, b)).catch(() => {});
     if (p.hello) { pairState("✓ التلفون مربوط. احكي فيه والكلام بيوصل هون.", true); return; }
     if (!p.text || !String(p.text).trim()) return;
     const a = $("ask");
@@ -1895,12 +1895,12 @@ async function listenPhone() {
     showTab(true); a.focus();
     pairState("✓ وصل كلام من التلفون.", true);
     setC("📱 وصل كلامك من التلفون. راجعه وابعت.");
-  };
-  src.onerror = () => { if (src === pairSrc && !$("pairbox").hidden) pairState("الوسيط مش واصل هلّق، بحاول لحالي…"); };
+  });
 }
 
 async function showPair(renew) {
-  if (!RELAY) { pairState("الوسيط على السيرفر لسّا مش جاهز، فالحكي من التلفون لسّا مش شغّال."); return; }
+  relayHint = await MaliPair.relay();
+  if (!relayHint) { pairState("الوسيط على السيرفر مش واصل هلّق، جرّب كمان شوي."); return; }
   const s = pairSecret(renew);
   try {
     await lib("qr");
