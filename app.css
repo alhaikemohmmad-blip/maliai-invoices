@@ -1,0 +1,122 @@
+/* MaliAI — تنسيق مشترك بين إضافة إكسل ووورد */
+:root{
+  --bg:#ffffff; --bg2:#f3f6f4; --fg:#18201b; --fg2:#5b6660; --line:#dde3df;
+  --accent:#107c41; --accent2:#0d6435; --tint:#e6f3eb; --err:#c0392b; --rec:#d23a2a;
+  --radius:12px;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#161b18; --bg2:#202722; --fg:#e8eee9; --fg2:#a0aca5; --line:#343d37; --accent:#2ea866; --accent2:#3cc078; --tint:#1c3326; --err:#ff7b6b; --rec:#ff6a5a; }
+}
+*{ box-sizing:border-box; }
+body{ margin:0; padding:12px 12px 20px; background:var(--bg); color:var(--fg);
+  font:14px/1.6 "IBM Plex Sans Arabic","Segoe UI",Tahoma,sans-serif; font-variant-numeric:tabular-nums; }
+button{ font:inherit; color:inherit; border-radius:8px; cursor:pointer; }
+button:disabled{ opacity:.45; cursor:default; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+svg{ width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; flex:none; }
+
+/* الرأس والتبويبات */
+.top{ display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+.brand{ display:flex; align-items:baseline; gap:6px; flex:1; min-width:0; }
+.brand b{ font-size:17px; font-weight:700; color:var(--accent); letter-spacing:.2px; }
+.brand span{ color:var(--fg2); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mark{ width:10px; height:10px; border-radius:2px; background:var(--accent); align-self:center; box-shadow:3px 3px 0 var(--tint); }
+.ghost{ padding:4px 10px; border:1px solid var(--line); background:transparent; color:var(--fg2); font-size:12px; }
+.ghost:hover{ color:var(--fg); border-color:var(--fg2); }
+.tabs{ display:flex; padding:3px; margin-bottom:12px; background:var(--bg2); border:1px solid var(--line); border-radius:10px; }
+.tabs button{ flex:1; padding:6px; border:0; background:transparent; color:var(--fg2); font-weight:500; }
+.tabs button[aria-selected="true"]{ background:var(--bg); color:var(--fg); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.08); }
+
+/* تبويب التفريغ */
+.drop{ display:block; padding:20px 12px; border:1.5px dashed var(--line); border-radius:var(--radius); background:var(--bg2); text-align:center; cursor:pointer; }
+.drop.over, .drop:focus-within{ border-color:var(--accent); background:var(--tint); }
+.drop small{ display:block; color:var(--fg2); }
+ul{ list-style:none; padding:0; margin:10px 0; }
+#list li{ padding:6px 8px; border-bottom:1px solid var(--line); font-size:13px; }
+#list li .st{ display:block; color:var(--fg2); }
+#list li.err .st{ color:var(--err); }
+#go{ width:100%; padding:10px; border:0; background:var(--accent); color:#fff; font-weight:600; }
+#go:hover:not(:disabled){ background:var(--accent2); }
+#clear, #save, #stopInv, #vexport, #vimport{ padding:5px 10px; border:1px solid var(--line); background:var(--bg2); }
+#status{ min-height:1.5em; color:var(--fg2); }
+
+/* المحادثة: البداية الفاضية */
+#empty{ padding:6px 2px 4px; }
+#empty .hi{ margin:0; font-size:18px; font-weight:600; }
+#empty .sub{ margin:2px 0 12px; color:var(--fg2); font-size:13px; }
+.sugg{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+.sugg button{ padding:5px 10px; border:1px solid var(--line); border-radius:999px; background:var(--bg); font-size:12.5px; text-align:start; }
+.sugg button:hover{ border-color:var(--accent); background:var(--tint); }
+
+/* الرسائل: الردّ بهامش أخضر زي هامش دفتر الأستاذ، والخطوات أسطر مأشّرة */
+#chat{ display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
+.msg{ overflow-wrap:anywhere; }
+.msg.me{ align-self:flex-start; max-width:88%; padding:7px 11px; background:var(--bg2); border:1px solid var(--line); border-radius:var(--radius); border-start-start-radius:4px; white-space:pre-wrap; }
+.msg.ai{ padding:2px 0; padding-inline-start:12px; border-inline-start:3px solid var(--accent); }
+.msg.step{ margin-inline-start:2px; padding-inline-start:10px; border-inline-start:1px dashed var(--line); color:var(--fg2); font-size:12px; line-height:1.5; }
+.msg.err{ padding:6px 10px; border-radius:8px; background:color-mix(in srgb, var(--err) 10%, transparent); color:var(--err); font-size:13px; white-space:pre-wrap; }
+.msg.undo{ align-self:flex-start; }
+.msg.undo button{ border-radius:999px; }
+.msg.undo button:disabled{ opacity:.6; cursor:default; }
+.msg.ai p{ margin:0 0 6px; }
+.msg.ai ul, .msg.ai ol{ margin:4px 0 6px; padding-inline-start:20px; list-style:revert; }
+.msg.ai h4{ margin:6px 0 4px; font-size:14px; }
+.msg.ai b{ font-weight:700; }
+.msg.ai table{ border-collapse:collapse; margin:6px 0; font-size:12px; display:block; max-width:100%; overflow-x:auto; }
+.msg.ai th, .msg.ai td{ border:1px solid var(--line); padding:3px 7px; text-align:start; }
+.msg.ai th{ background:var(--bg2); font-weight:600; }
+.msg.ai code{ background:var(--bg2); padding:0 4px; border-radius:4px; direction:ltr; unicode-bidi:isolate; font-size:12px; }
+
+/* مربّع الكتابة */
+.composer{ border:1px solid var(--line); border-radius:var(--radius); background:var(--bg); transition:border-color .15s; }
+.composer:focus-within, #tab-chat.over .composer{ border-color:var(--accent); }
+#chips{ margin:8px 10px 0; padding:4px 8px; border-radius:8px; background:var(--tint); font-size:12px; color:var(--fg2); }
+#chips button, #vaultList button{ padding:0 6px; border:0; background:none; color:var(--err); }
+#ask{ display:block; width:100%; min-height:52px; padding:10px 12px 4px; border:0; background:transparent; color:var(--fg); font:inherit; resize:vertical; outline:none; }
+.tools{ display:flex; align-items:center; gap:4px; padding:4px 6px 6px; }
+.tools .grow{ flex:1; }
+.icon{ display:grid; place-items:center; width:34px; height:34px; padding:0; border:0; background:transparent; color:var(--fg2); }
+.icon:hover:not(:disabled){ background:var(--bg2); color:var(--fg); }
+#send{ display:flex; align-items:center; gap:6px; padding:6px 14px; border:0; background:var(--accent); color:#fff; font-weight:600; }
+#send:hover:not(:disabled){ background:var(--accent2); }
+#send svg{ transform:scaleX(-1); }
+#stop{ padding:6px 12px; border:1px solid var(--err); background:transparent; color:var(--err); font-weight:600; }
+
+/* التسجيل: الكلام بينكتب بالمربّع وإنت بتحكي */
+#recbar{ display:flex; align-items:center; gap:8px; height:52px; padding:0 12px; }
+#recbar[hidden]{ display:none; }
+#recbar .dot{ width:9px; height:9px; border-radius:50%; background:var(--rec); animation:pulse 1.2s ease-in-out infinite; }
+#rectime{ min-width:34px; color:var(--rec); font-weight:600; }
+#livehint{ flex:1; color:var(--fg2); font-size:12px; }
+.composer.rec{ border-color:var(--rec); }
+#mic[aria-pressed="true"]{ background:var(--rec); color:#fff; }
+@keyframes pulse{ 50%{ opacity:.25; } }
+
+#cstatus{ min-height:1.4em; margin:6px 2px 0; color:var(--fg2); font-size:12px; }
+#cstatus.busy::after{ content:""; display:inline-block; width:1.2em; text-align:start; animation:dots 1.2s steps(4) infinite; }
+@keyframes dots{ 0%{ content:""; } 25%{ content:"."; } 50%{ content:".."; } 75%{ content:"..."; } }
+@media (prefers-reduced-motion: reduce){ *{ animation:none !important; transition:none !important; } }
+
+/* 📱 ربط التلفون: QR على ورقة بيضاء (الكاميرات بتقرأه أسرع)، وجنبه الشرح والحالة */
+#pairbox{ margin-top:8px; padding:12px; border:1px solid var(--line); border-radius:var(--radius); background:var(--bg2); }
+#pairbox[hidden]{ display:none; }
+#pairbox .qr{ display:grid; place-items:center; width:180px; margin:0 auto 8px; padding:8px; border-radius:8px; background:#fff; }
+#pairbox .qr svg{ width:100%; height:auto; display:block; }
+#pairbox p{ margin:0 0 6px; font-size:12.5px; color:var(--fg2); text-align:center; }
+#pairstate{ font-weight:600; color:var(--fg) !important; }
+#pairstate.on{ color:var(--accent) !important; }
+#pairbox .row{ justify-content:center; }
+#phone[aria-expanded="true"]{ background:var(--tint); color:var(--accent); }
+
+/* الخزنة والإعدادات */
+details{ margin-top:12px; border-top:1px solid var(--line); padding-top:8px; }
+summary{ cursor:pointer; color:var(--fg2); font-size:13px; }
+summary:hover{ color:var(--fg); }
+details label{ display:block; margin:8px 0 2px; font-size:12.5px; color:var(--fg2); }
+details input, details select{ width:100%; padding:7px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+details small{ display:block; color:var(--fg2); margin:6px 0; font-size:12px; }
+fieldset{ margin:10px 0 0; padding:4px 10px 10px; border:1px solid var(--line); border-radius:10px; }
+legend{ padding:0 6px; font-size:12.5px; font-weight:600; }
+.row{ display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+#vaultList{ padding-inline-start:18px; font-size:12px; color:var(--fg2); }
+#vaultList li.h{ list-style:none; margin:6px 0 2px; margin-inline-start:-18px; color:var(--fg); font-weight:600; }
