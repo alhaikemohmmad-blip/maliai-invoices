@@ -331,6 +331,8 @@ let CHAT = [];          // سجلّ المحادثة كامل: بينضاف عل
 let UI = [];            // اللي معروض بالشاشة، بينحفظ مع المحادثة
 let ctxSent = false;    // فهرس الخزنة انبعت بأوّل رسالة بهالمحادثة؟
 let stopAsked = false, chatAbort = null;
+let lastAt = 0;         // وقت آخر طلب بهالمحادثة (١ = محادثة قديمة من قبل هالميزة)
+let prevChat = "";      // مسار المحادثة اللي قبلها بالخزنة، بينذكر بأوّل رسالة بالجديدة
 
 // Markdown بسيط وآمن لردود MaliAI: كل النصّ بيتعقّم أوّل، وبعدين عناوين ونقاط وجداول وخطّ عريض بس
 function md(src) {
@@ -387,18 +389,20 @@ const idb = (() => {
     del: k => tx("readwrite", s => s.delete(k)),
     all: prefix => tx("readonly", s => s.getAll(IDBKeyRange.bound(prefix, prefix + "￿"))) };
 })();
-const saveChat = () => idb.set(MALI.chatKey, { CHAT, UI, ctxSent }).catch(() => {});
+const saveChat = () => idb.set(MALI.chatKey, { CHAT, UI, ctxSent, at: lastAt }).catch(() => {});
 async function loadChat() {
   try {
     const s = await idb.get(MALI.chatKey);
     if (!s || !Array.isArray(s.CHAT)) return;
     CHAT = s.CHAT; ctxSent = !!s.ctxSent;
+    lastAt = s.at || (s.CHAT.length ? 1 : 0);   // محادثة محفوظة قبل هالتحديث: الطلب الجاي بيبلّش جديدة
     for (const it of s.UI || []) say(it.cls, it.text);
   } catch (e) {}
 }
 
 // ---------- خزنة MaliAI بصيغة Obsidian: ذاكرة/ ملاحظاته، ومسودات/ الملفات اللي انقرت مرّة وحدة ----------
-const MEM_DIR = "ذاكرة/", DRAFT_DIR = "مسودات/";
+const MEM_DIR = "ذاكرة/", DRAFT_DIR = "مسودات/", CHAT_DIR = DRAFT_DIR + "محادثات/";
+const SHOW_CHATS = 5;      // ponytail: آخر كم محادثة محفوظة بتنذكر بأوّل كل محادثة جديدة، الأقدم بالبحث
 const VAULT = new Map();   // path → { path, text, at, + للمسودات: src, meta, hash }
 const INLINE_MEM = 6000;   // ponytail: ذاكرة أصغر من هيك بتنبعت كاملة بأوّل المحادثة، الأكبر فهرس بس وبيقرأ اللي بدّه
 const MAX_NOTE = 20000;    // ponytail: حدّ ملاحظة الذاكرة الوحدة، الأكبر بتنقسم لملاحظات مربوطة
@@ -497,20 +501,23 @@ const gist = n => (n.text.split("\n").find(l => l.trim() && !l.startsWith("#")) 
 const draftLine = n => `- ${n.path} — ${n.meta}, ${n.text.split("\n").length} lines, ${day(n.at)}`;
 function vaultContext() {
   const all = [...VAULT.values()].sort((a, b) => a.path.localeCompare(b.path, "ar"));
-  const mem = all.filter(n => n.path.startsWith(MEM_DIR)), drafts = all.filter(n => n.path.startsWith(DRAFT_DIR));
+  const mem = all.filter(n => n.path.startsWith(MEM_DIR)), drafts = all.filter(n => n.path.startsWith(DRAFT_DIR) && !n.path.startsWith(CHAT_DIR));
+  const chats = all.filter(n => n.path.startsWith(CHAT_DIR)).sort((a, b) => b.at - a.at);
   const memText = !mem.length ? "Your memory is empty so far."
     : mem.reduce((a, n) => a + n.text.length, 0) <= INLINE_MEM ? "Your memory notes, in full:\n\n" + mem.map(n => `=== ${n.path}\n${n.text}`).join("\n\n")
     : "Your memory notes (open them with vault_read):\n" + mem.map(n => `- ${n.path} — ${gist(n)}`).join("\n");
   const draftText = drafts.length ? "Drafts of files uploaded earlier (read-only; vault_search / vault_read):\n" + drafts.map(draftLine).join("\n") : "No file drafts yet.";
-  return `[Your vault at the start of this conversation]\n${memText}\n\n${draftText}`;
+  const chatText = chats.length ? `\n\nEarlier conversations, saved word for word (latest ${Math.min(SHOW_CHATS, chats.length)} of ${chats.length}; vault_search in مسودات finds older ones):\n` +
+    chats.slice(0, SHOW_CHATS).map(n => `- ${n.path} — ${gist(n)}`).join("\n") : "";
+  return `[Your vault at the start of this conversation]\n${memText}\n\n${draftText}${chatText}`;
 }
 
 function renderVault() {
   const all = [...VAULT.values()].sort((a, b) => a.path.localeCompare(b.path, "ar"));
   $("vaultN").textContent = all.length;
   $("vaultList").innerHTML = "";
-  for (const [dir, label] of [[MEM_DIR, "🧠 ذاكرة"], [DRAFT_DIR, "📄 مسودات"]]) {
-    const items = all.filter(n => n.path.startsWith(dir));
+  for (const [dir, label] of [[MEM_DIR, "🧠 ذاكرة"], [DRAFT_DIR, "📄 مسودات"], [CHAT_DIR, "💬 محادثات"]]) {
+    const items = all.filter(n => n.path.startsWith(dir) && (dir !== DRAFT_DIR || !n.path.startsWith(CHAT_DIR)));
     if (!items.length) continue;
     const h = document.createElement("li");
     h.className = "h"; h.textContent = `${label} (${items.length})`;
@@ -642,13 +649,21 @@ async function chatSend() {
   const c = readCfg();
   if (c.provider !== "anthropic" || !c.key) { $("settings").open = true; say("err", "مساعد إكسل بيشتغل مع Claude: اختار Anthropic من الإعدادات وحط المفتاح."); return; }
   if (overBudget()) { say("err", overBudget()); return; }
+  // رجع بعد ساعة أو أكثر وطلب إشي جديد (مش «كمّل»): محادثة جديدة لحالها، والقديمة بتنحفظ بالخزنة
+  if (CHAT.length && lastAt && Date.now() - lastAt > NEW_CHAT_AFTER && CHAT[CHAT.length - 1].role === "assistant" && !KEEP_GOING.test(text)) {
+    const old = await archiveChat().catch(() => null), why = lastAt > 1 ? `لأنّ آخر رسالة كانت قبل ${ago((Date.now() - lastAt) / 60e3)}` : "لأنّ المحادثة القديمة طويلة";
+    clearChat(); prevChat = old ? old.path : "";
+    say("step", `🆕 بلّشت محادثة جديدة لحالها ${why}، عشان الطلب يضلّ رخيص.` + (old ? ` القديمة انحفظت بالخزنة «${title(old.path)}» وبرجعلها إذا احتجتها.` : ""));
+  }
   if (!inHost) say("err", MALI.notInHost);
   $("ask").value = ""; attached = []; attachFiles([]);
   say("me", text + (files.length ? "\n📎 " + files.map(f => f.name || "صورة ملصوقة").join("، ") : ""));
   $("send").hidden = true; $("stop").hidden = false; $("cstatus").classList.add("busy"); stopAsked = false;
   chatAbort = new AbortController();
   // فهرس الخزنة قبل مرفقات هالرسالة، عشان ما تنذكر مرّتين
-  const ctx = ctxSent ? [] : [{ type: "text", text: vaultContext() }];
+  const ctx = ctxSent ? [] : [{ type: "text", text: vaultContext() +
+    (prevChat ? `\n\nThe previous conversation is saved as ${prevChat}; read it with vault_read only if the request refers to earlier work.` : "") }];
+  prevChat = "";
   let blocks = [];
   if (files.length) {
     $("cstatus").textContent = "بقرأ المرفقات مرّة وحدة وبحفظها بالخزنة…";
@@ -724,6 +739,7 @@ async function chatSend() {
     if (m) say("err", m); else say("step", "وقّفت بطلبك.");
   }
   if (MALI.turnEnd) MALI.turnEnd();   // إذا تغيّر إشي بالملف بيطلع زرّ «↩️ تراجع»
+  lastAt = Date.now();
   saveChat();
   $("cstatus").textContent = total ? `💰 هالطلب ${usd(readSpend().usd - spendAtStart)} · هالشهر ${usd(readSpend().usd)} · ⚡ ${Math.round(cached / total * 100)}% من الكاش${budgetNote()}` : "";
   $("cstatus").classList.remove("busy");
@@ -733,7 +749,7 @@ $("send").onclick = chatSend;
 $("ask").onkeydown = e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) chatSend(); };
 document.querySelectorAll(".sugg button").forEach(b => b.onclick = () => { $("ask").value = b.textContent; $("ask").focus(); });
 $("stop").onclick = () => { stopAsked = true; if (chatAbort) chatAbort.abort(); $("cstatus").textContent = "بوقّف…"; };
-$("newchat").onclick = () => {   // كبستين عشان ما تنمسح المحادثة بالغلط؛ الذاكرة الدائمة بتضلّ
+$("newchat").onclick = async () => {   // كبستين عشان ما تنمسح المحادثة بالغلط؛ القديمة بتنحفظ بالخزنة
   const b = $("newchat");
   if (!b.dataset.sure) {
     b.dataset.sure = "1"; b.textContent = "متأكّد؟ اكبس كمان";
@@ -741,9 +757,35 @@ $("newchat").onclick = () => {   // كبستين عشان ما تنمسح الم
     return;
   }
   delete b.dataset.sure; b.textContent = "محادثة جديدة";
-  CHAT = []; UI = []; ctxSent = false; $("chat").innerHTML = ""; $("cstatus").textContent = ""; $("empty").hidden = false;
+  const old = await archiveChat().catch(() => null);
+  clearChat(); prevChat = old ? old.path : ""; lastAt = 0;
+  if (old) $("cstatus").textContent = `المحادثة القديمة انحفظت بالخزنة «${title(old.path)}».`;
   saveChat();
 };
+
+// ---------- المحادثة الجديدة: القديمة بتنحفظ بالخزنة بصيغة Obsidian (بدون ولا توكن)، والجديدة بتبلّش صغيرة ورخيصة ----------
+const NEW_CHAT_AFTER = 60 * 60e3;   // ponytail: بعد ساعة بدون رسائل الكاش بيكون انتهى، فالطلب الجاي بيبلّش محادثة جديدة لحاله
+const KEEP_GOING = /^\s*(كم+ّ?ل|كمان|تابع|و?بعدين|continue)/i;   // «كمّل» بعد الاستراحة بتكمّل نفس المحادثة
+const ago = m => { m = Math.round(m); const h = Math.round(m / 60), d = Math.round(m / 1440);
+  return m < 120 ? `${m} دقيقة` : h < 24 ? (h === 2 ? "ساعتين" : `${h} ساعات`) : d === 1 ? "يوم" : d === 2 ? "يومين" : d <= 10 ? `${d} أيام` : `${d} يوم`; };
+function clearChat() { CHAT = []; UI = []; ctxSent = false; $("chat").innerHTML = ""; $("cstatus").textContent = ""; $("empty").hidden = false; }
+async function archiveChat() {
+  const items = UI.filter(it => ["me", "ai", "step", "err"].includes(it.cls) && String(it.text || "").trim());
+  const asks = items.filter(it => it.cls === "me");
+  if (!asks.length) return null;
+  const p2 = n => String(n).padStart(2, "0"), t = new Date(lastAt > 1 ? lastAt : Date.now());
+  const stamp = `${t.getFullYear()}-${p2(t.getMonth() + 1)}-${p2(t.getDate())} ${p2(t.getHours())}-${p2(t.getMinutes())}`;
+  let path = `${CHAT_DIR}محادثة ${stamp}.md`;
+  for (let i = 2; VAULT.has(path); i++) path = `${CHAT_DIR}محادثة ${stamp} (${i}).md`;
+  // روابط Obsidian لكل ملاحظة أو مسودة انذكرت بالمحادثة
+  const links = [...new Set([...JSON.stringify(CHAT).matchAll(/(?:ذاكرة|مسودات)\/[^"\\\n]+?\.md/g)].map(m => title(m[0])))];
+  const who = { me: "**الطلب:** ", ai: "**الرد:** ", step: "- ", err: "- ⚠️ " };
+  const n = asks.length, count = n === 1 ? "طلب واحد" : n === 2 ? "طلبين" : n <= 10 ? `${n} طلبات` : `${n} طلب`;
+  const text = [`# محادثة ${stamp}`, `${count}، أوّلها «${asks[0].text.split("\n")[0].slice(0, 80)}»`,
+    ...(links.length ? ["", "مربوطة بـ: " + links.map(x => `[[${x}]]`).join(" ")] : []), "", "## المحادثة",
+    ...items.map(it => who[it.cls] + it.text)].join("\n");
+  return putNote({ path, text, meta: `محادثة، ${count}`, kind: "chat" });
+}
 
 // =====================================================================
 // كتابة بالصوت مجّاناً بدون مفتاح:
