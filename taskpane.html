@@ -341,6 +341,7 @@ How you work:
 - Deleting by condition (empty rows, duplicates, a value, numbers above or below a limit): use delete_rows_where. Call it first without confirmed: it deletes nothing and returns how many rows match with examples. Show the accountant the count and a few examples, and only after their yes call it again with confirmed: true. Do the same with delete_objects for charts, shapes, pivot tables, tables and named ranges.
 - Removing colors and formatting: use clear_formatting on exactly the range asked (fills, font colors, bold and italic, borders, conditional formatting, drop-down validation, number formats, checkboxes). It never touches the values.
 - Objects over the sheet: add_shape places shapes, lines, arrows and text boxes, positioned by cells so they line up with the data. add_checkboxes puts real tick boxes in cells (TRUE when ticked) or ✓/✗ marks colored green and red. workbook_overview lists the charts, shapes and pivot tables already on each sheet.
+- Printing: when the accountant wants a sheet printed or ready to print, make it print-ready completely. First the table itself: a bold header row with a light fill, thin borders around the table, number formats with thousands separators and the right decimals, wrap long text, sensible column widths (autofit, then widen anything that shows ####), the totals row bold with a top border, and no stray content outside the report. Then page_setup (auto: true is a good start; add a header with the company or report name when you know it). Read the estimate it returns: if the scale is below about 70% or a lot of pages print for little data, fix it (landscape, narrow margins, a tighter print area, fewer or narrower columns) and set up again. Tell the accountant how many pages it will print on, then that Ctrl+P shows the preview and prints; the add-in can't press Print itself.
 - Sheet tabs: manage_sheets renames, opens (activate), reorders, colors, hides, shows and copies sheets; when the accountant asks to go to a sheet or see one, activate it. move_range moves a table or block of cells like cut and paste, on the same sheet or to another one.
 - The accountant may dictate by voice, so a message can be a speech transcription: read names and numbers with that in mind, and ask when a number looks misheard.
 - Work in blocks: write headers and all formulas of a table in one write_range call, not cell by cell.
@@ -447,7 +448,25 @@ const EXCEL_TOOLS = [
     input_schema: { type: "object", properties: {
       sheet: { type: "string" }, address: { type: "string" }, table: { type: "string", description: "Name of an Excel table to move whole" },
       to_sheet: { type: "string", description: "Destination sheet; omit for the same sheet" }, to_cell: { type: "string", description: "Top-left cell of the destination" },
-      overwrite: { type: "boolean", description: "true only after the accountant agreed to replace what is there" } }, required: ["to_cell"] } }
+      overwrite: { type: "boolean", description: "true only after the accountant agreed to replace what is there" } }, required: ["to_cell"] } },
+  { name: "page_setup", description: "Set up a sheet for printing, then report the settings and an estimate of how many pages it prints on and at what scale. auto: true picks good defaults in one go (print area = the used area, header row repeated on every page, portrait or landscape by the table's width, all columns one page wide, centered, page X of Y and the date in the footer); any field you also give overrides auto. Call it with only sheet to read the current settings. Header and footer texts take Excel codes: &P page number, &N total pages, &D date, &T time, &A sheet name, &F file name, &B bold on/off, &12 font size. The add-in cannot press Print: the accountant prints with Ctrl+P.",
+    input_schema: { type: "object", properties: {
+      sheet: { type: "string" }, auto: { type: "boolean" },
+      print_area: { type: "string", description: "e.g. A1:H120; empty string clears it (prints the used area)" },
+      orientation: { type: "string", enum: ["Portrait", "Landscape"] }, paper: { type: "string", enum: ["A4", "A3", "A5", "Letter", "Legal"] },
+      fit_width_pages: { type: "integer", description: "Shrink so the columns fit this many pages wide (usually 1)" },
+      fit_height_pages: { type: "integer", description: "Pages tall; 0 = as many as needed" },
+      scale: { type: "integer", description: "Print scale in percent (10-400), instead of fit" },
+      margins: { type: ["string", "object"], description: "normal, narrow or wide, or {top,bottom,left,right,header,footer} in cm" },
+      center_horizontally: { type: "boolean" }, center_vertically: { type: "boolean" },
+      repeat_rows: { type: "string", description: "Rows printed at the top of every page, e.g. 1:1 or 3:4; empty string clears" },
+      repeat_columns: { type: "string", description: "Columns printed on every page, e.g. A:A; empty string clears" },
+      header: { type: "object", properties: { left: { type: "string" }, center: { type: "string" }, right: { type: "string" } } },
+      footer: { type: "object", properties: { left: { type: "string" }, center: { type: "string" }, right: { type: "string" } } },
+      gridlines: { type: "boolean", description: "Print the grey cell gridlines" }, headings: { type: "boolean", description: "Print row numbers and column letters" },
+      black_and_white: { type: "boolean" }, first_page_number: { type: "integer" },
+      page_breaks: { type: "object", description: "rows: start a new page at these row numbers; columns: at these column letters; clear: remove manual breaks first",
+        properties: { rows: { type: "array", items: { type: "integer" } }, columns: { type: "array", items: { type: "string" } }, clear: { type: "boolean" } } } } } }
 ];
 
 const ws = (ctx, name) => name ? ctx.workbook.worksheets.getItem(name) : ctx.workbook.worksheets.getActiveWorksheet();
@@ -473,8 +492,75 @@ const EXCEL_LABELS = {
   manage_sheets: a => (Array.isArray(a.actions) ? a.actions : []).map(x => ({ rename: `بغيّر اسم «${x.sheet}» لـ«${x.new_name}»`, activate: `بفتح «${x.sheet}»`,
     move: `بنقل «${x.sheet}»${x.before ? " قبل «" + x.before + "»" : x.after ? " بعد «" + x.after + "»" : ""}`, tab_color: `بلوّن «${x.sheet}»`, hide: `بخبّي «${x.sheet}»`,
     show: `بظهّر «${x.sheet}»`, copy: `بنسخ «${x.sheet}»` })[x.action] || x.action).join("، ") || "بالشيتات",
-  move_range: a => `بنقل ${a.table ? "جدول «" + a.table + "»" : a.address} لـ ${a.to_sheet ? "«" + a.to_sheet + "» " : ""}${a.to_cell}`
+  move_range: a => `بنقل ${a.table ? "جدول «" + a.table + "»" : a.address} لـ ${a.to_sheet ? "«" + a.to_sheet + "» " : ""}${a.to_cell}`,
+  page_setup: a => Object.keys(a).some(k => k !== "sheet") ? `بجهّز ${a.sheet ? "«" + a.sheet + "»" : "الشيت"} للطباعة` : `بشوف إعدادات طباعة ${a.sheet ? "«" + a.sheet + "»" : "الشيت"}`
 };
+
+// ---------- 🖨 الطباعة: إعدادات الصفحة، وتقدير كم صفحة رح تطلع ----------
+const PAGE_PROPS = "orientation,paperSize,leftMargin,rightMargin,topMargin,bottomMargin,headerMargin,footerMargin,centerHorizontally,centerVertically,printGridlines,printHeadings,blackAndWhite,firstPageNumber,zoom";
+const HF_PARTS = "leftHeader,centerHeader,rightHeader,leftFooter,centerFooter,rightFooter";
+const PAPER = { A4: [595, 842], A3: [842, 1191], A5: [420, 595], Letter: [612, 792], Legal: [612, 1008] };   // بالنقاط
+const MARGINS = { normal: { top: 1.91, bottom: 1.91, left: 1.78, right: 1.78, header: 0.76, footer: 0.76 },
+  narrow: { top: 1.91, bottom: 1.91, left: 0.64, right: 0.64, header: 0.76, footer: 0.76 },
+  wide: { top: 2.54, bottom: 2.54, left: 2.54, right: 2.54, header: 1.27, footer: 1.27 } };   // بالسنتيمتر، زي قوالب إكسل
+const CM = 28.3465;
+const noSheet = a => a.split(",").map(p => p.split("!").pop()).join(",");
+const titleRef = (v, rows) => {   // «1» أو «3:4» ← $3:$4 ، «A» ← $A:$A
+  const p = String(v).replace(/\$/g, "").split(":").map(x => x.trim().toUpperCase());
+  if (p.length === 1) p.push(p[0]);
+  if (!p.every(x => rows ? /^\d+$/.test(x) : /^[A-Z]{1,3}$/.test(x))) throw new Error(`${v} is not ${rows ? "a row range like 1:2" : "a column range like A:B"}`);
+  return p.map(x => "$" + x).join(":");
+};
+// منطقة الطباعة واسمها المحفوظ بالشيت: مسحها = حذف الاسم
+async function clearSheetName(ctx, s, name) {
+  const n = s.names.getItemOrNullObject(name); n.load("name"); await ctx.sync();
+  if (n.isNullObject) return false;
+  n.delete(); await ctx.sync(); return true;
+}
+const sizesOf = async (ctx, r) => {   // مجموع عرض الأعمدة وارتفاع الصفوف بالنقاط (المخفي = صفر)
+  const cw = r.getRow(0).getCellProperties({ format: { columnWidth: true } }), rh = r.getColumn(0).getCellProperties({ format: { rowHeight: true } });
+  await ctx.sync();
+  const sum = (p, k) => p.value.flat().reduce((n, c) => n + ((c.format && c.format[k]) || 0), 0);
+  return { W: sum(cw, "columnWidth"), H: sum(rh, "rowHeight") };
+};
+
+async function printReport(ctx, s) {
+  const pl = s.pageLayout; pl.load(PAGE_PROPS); s.load("name");
+  const area = pl.getPrintAreaOrNullObject(), tr = pl.getPrintTitleRowsOrNullObject(), tc = pl.getPrintTitleColumnsOrNullObject(), used = s.getUsedRangeOrNullObject();
+  [area, tr, tc, used].forEach(x => x.load("address"));
+  const hf = pl.headersFooters.defaultForAllPages; hf.load(HF_PARTS);
+  const hb = s.horizontalPageBreaks, vb = s.verticalPageBreaks; hb.load("rowIndex"); vb.load("columnIndex");
+  await ctx.sync();
+  const areaAddr = !area.isNullObject ? noSheet(area.address).split(",")[0] : used.isNullObject ? null : noSheet(used.address);
+  let est = null;
+  if (areaAddr) {
+    const { W, H } = await sizesOf(ctx, s.getRange(areaAddr));
+    const T = tr.isNullObject ? 0 : (await sizesOf(ctx, s.getRange(noSheet(tr.address)))).H;
+    const [pw, ph] = PAPER[pl.paperSize] || PAPER.A4, land = pl.orientation === "Landscape";
+    const PW = (land ? ph : pw) - pl.leftMargin - pl.rightMargin, PH = (land ? pw : ph) - pl.topMargin - pl.bottomMargin, z = pl.zoom || {};
+    let sc = z.scale ? z.scale / 100 : 1;
+    if (z.horizontalFitToPages || z.verticalFitToPages) {
+      sc = 1;
+      if (z.horizontalFitToPages) sc = Math.min(sc, z.horizontalFitToPages * PW / Math.max(1, W));
+      if (z.verticalFitToPages) sc = Math.min(sc, z.verticalFitToPages * PH / Math.max(1, H));
+      sc = Math.max(0.1, sc);
+    }
+    const wide = Math.max(1, Math.ceil(W * sc / PW - 0.001));
+    const tall = Math.max(1, Math.ceil(Math.max(0, H - T) * sc / Math.max(1, PH - T * sc) - 0.001)) + hb.items.length;
+    est = { pages: wide * tall, pages_wide: wide, pages_tall: tall, scale_percent: Math.round(sc * 100), note: "an estimate; Ctrl+P shows the exact preview" };
+    if (sc < 0.7) est.warning = `it prints small at ${Math.round(sc * 100)}%: try landscape, narrow margins, a tighter print area or narrower columns`;
+    if (wide > 1) est.warning = (est.warning ? est.warning + "; " : "") + `the columns spread over ${wide} pages side by side: fit to 1 page wide or use landscape`;
+  }
+  const cm = v => Math.round(v / CM * 100) / 100;
+  return { sheet: s.name, print_area: area.isNullObject ? `not set, prints the used area${areaAddr ? " " + areaAddr : ""}` : noSheet(area.address),
+    orientation: pl.orientation, paper: pl.paperSize, zoom: pl.zoom,
+    margins_cm: { top: cm(pl.topMargin), bottom: cm(pl.bottomMargin), left: cm(pl.leftMargin), right: cm(pl.rightMargin), header: cm(pl.headerMargin), footer: cm(pl.footerMargin) },
+    centered: { horizontally: pl.centerHorizontally, vertically: pl.centerVertically },
+    repeat_rows: tr.isNullObject ? null : noSheet(tr.address), repeat_columns: tc.isNullObject ? null : noSheet(tc.address),
+    header: { left: hf.leftHeader, center: hf.centerHeader, right: hf.rightHeader }, footer: { left: hf.leftFooter, center: hf.centerFooter, right: hf.rightFooter },
+    gridlines: pl.printGridlines, headings: pl.printHeadings, black_and_white: pl.blackAndWhite, first_page_number: pl.firstPageNumber,
+    manual_page_breaks: { rows: hb.items.map(b => b.rowIndex + 1), columns: vb.items.map(b => colName(b.columnIndex + 1)) }, estimate: est };
+}
 
 const EXCEL_HANDLERS = {
   workbook_overview: () => Excel.run(async ctx => {
@@ -932,6 +1018,68 @@ const EXCEL_HANDLERS = {
     return { moved: src.address, to: dest.address, ...(apiOK("1.11") ? {} : { note: "older Excel: copied then cleared, so formulas that pointed at the old place did not follow" }) };
   }),
 
+  // 🖨 تجهيز للطباعة: auto بيختار كل إشي، وأيّ حقل ثاني بيغلبه. الإضافة ما بتكبس «طباعة»، المحاسب بيكبس Ctrl+P
+  page_setup: (a) => Excel.run(async ctx => {
+    if (!apiOK("1.9")) throw new Error("this Excel version has no print settings API (needs ExcelApi 1.9); set it from the Page Layout tab");
+    const s = ws(ctx, a.sheet), pl = s.pageLayout, notes = [], o = { ...a };
+    if (Object.keys(a).some(k => k !== "sheet")) {
+      if (a.auto) {
+        const u = s.getUsedRangeOrNullObject(true); u.load("address,rowIndex,rowCount"); await ctx.sync();
+        if (u.isNullObject) throw new Error("the sheet is empty; there is nothing to print");
+        const { W } = await sizesOf(ctx, u), portrait = PAPER.A4[0] - 2 * MARGINS.narrow.left * CM;
+        o.print_area ??= noSheet(u.address);
+        if (u.rowCount > 1) o.repeat_rows ??= String(u.rowIndex + 1);
+        o.paper ??= "A4";
+        o.orientation ??= W > portrait / 0.8 ? "Landscape" : "Portrait";   // بالطول إلّا إذا الخطّ رح يصغر أقلّ من ٨٠٪
+        if (o.scale == null) { o.fit_width_pages ??= 1; o.fit_height_pages ??= 0; }
+        o.margins ??= W > PAPER.A4[0] - 2 * MARGINS.normal.left * CM ? "narrow" : "normal";
+        o.center_horizontally ??= true;
+        o.header ??= { center: "&B&12&A" };
+        o.footer ??= { center: "صفحة &P من &N", left: "&D" };
+        o.gridlines ??= false;
+      }
+      if (o.print_area !== undefined) {
+        if (o.print_area) pl.setPrintArea(noSheet(o.print_area));
+        else if (!(await clearSheetName(ctx, s, "Print_Area"))) notes.push("there was no print area to clear");
+      }
+      if (o.orientation) pl.orientation = o.orientation;
+      if (o.paper) pl.paperSize = o.paper;
+      if (o.margins) {
+        const M = typeof o.margins === "string" ? MARGINS[o.margins] : o.margins;
+        if (!M) throw new Error("margins: normal, narrow, wide, or {top,bottom,left,right,header,footer} in cm");
+        for (const k of ["top", "bottom", "left", "right", "header", "footer"]) if (M[k] != null) pl[k + "Margin"] = Math.round(Number(M[k]) * CM * 100) / 100;
+      }
+      if (o.scale) pl.zoom = { scale: Math.max(10, Math.min(400, Math.round(o.scale))) };
+      else if (o.fit_width_pages != null || o.fit_height_pages != null) pl.zoom = { horizontalFitToPages: o.fit_width_pages ?? 1, verticalFitToPages: o.fit_height_pages ?? 0 };
+      for (const [k, p] of [["center_horizontally", "centerHorizontally"], ["center_vertically", "centerVertically"], ["gridlines", "printGridlines"],
+        ["headings", "printHeadings"], ["black_and_white", "blackAndWhite"], ["first_page_number", "firstPageNumber"]]) if (o[k] != null) pl[p] = o[k];
+      if (o.repeat_rows !== undefined || o.repeat_columns !== undefined) {
+        if (o.repeat_rows === "" || o.repeat_columns === "") {   // الاسم المحفوظ واحد للصفوف والأعمدة: بنمسحه وبنرجّع اللي ما انطلب مسحه
+          const keepR = o.repeat_rows === undefined ? pl.getPrintTitleRowsOrNullObject() : null, keepC = o.repeat_columns === undefined ? pl.getPrintTitleColumnsOrNullObject() : null;
+          [keepR, keepC].forEach(x => x && x.load("address")); await ctx.sync();
+          await clearSheetName(ctx, s, "Print_Titles");
+          if (keepR && !keepR.isNullObject) pl.setPrintTitleRows(noSheet(keepR.address));
+          if (keepC && !keepC.isNullObject) pl.setPrintTitleColumns(noSheet(keepC.address));
+        }
+        if (o.repeat_rows) pl.setPrintTitleRows(titleRef(o.repeat_rows, true));
+        if (o.repeat_columns) pl.setPrintTitleColumns(titleRef(o.repeat_columns, false));
+      }
+      if (o.header || o.footer) {
+        const hf = pl.headersFooters, d = hf.defaultForAllPages;
+        hf.state = "Default";
+        for (const [part, v] of [["Header", o.header], ["Footer", o.footer]]) if (v) for (const side of ["left", "center", "right"]) if (v[side] != null) d[side + part] = String(v[side]);
+      }
+      if (o.page_breaks) {
+        const hb = s.horizontalPageBreaks, vb = s.verticalPageBreaks;
+        if (o.page_breaks.clear) { hb.removePageBreaks(); vb.removePageBreaks(); }
+        for (const r of o.page_breaks.rows || []) hb.add(`A${r}`);
+        for (const c of o.page_breaks.columns || []) vb.add(`${String(c).toUpperCase()}1`);
+      }
+      await ctx.sync();
+    }
+    return { ...(await printReport(ctx, s)), ...(notes.length ? { notes } : {}), how_to_print: "The add-in can't press Print: Ctrl+P (or File > Print) shows the preview and prints." };
+  }),
+
   create_pivot: ({ name, source_sheet, source_address, dest_sheet, dest_cell, rows, columns = [], values }) => Excel.run(async ctx => {
     const src = ctx.workbook.worksheets.getItem(source_sheet).getRange(source_address);
     const pt = ctx.workbook.pivotTables.add(name, src, ws(ctx, dest_sheet).getRange(dest_cell));
@@ -968,8 +1116,10 @@ let undoTurn = null;
 const undoStack = [];
 const undoMutates = (name, a) => name in EXCEL_HANDLERS && !UNDO_SAFE.has(name)
   && !(["delete_rows_where", "delete_objects", "change_structure"].includes(name) && !a.confirmed)
-  && !(name === "manage_sheets" && Array.isArray(a.actions) && a.actions.every(x => x.action === "activate"));
+  && !(name === "manage_sheets" && Array.isArray(a.actions) && a.actions.every(x => x.action === "activate"))
+  && !(name === "page_setup" && !Object.keys(a).some(k => k !== "sheet"));
 const undoSheetsOf = (name, a) => name === "create_pivot" ? [a.dest_sheet]
+  : name === "page_setup" ? []   // الخلايا ما بتتغيّر؛ إعدادات الصفحة إلها صورة لحالها (undoSnapPage)
   : name === "manage_sheets" ? (Array.isArray(a.actions) ? a.actions : []).map(x => x.sheet).filter(Boolean)
   : name === "move_range" ? [a.table ? null : a.sheet || "", a.to_sheet || null].filter(x => x !== null)
   : name === "add_sheet" || name === "define_name" || (name === "delete_objects" && a.kind === "names") ? [] : [a.sheet || ""];
@@ -1083,7 +1233,40 @@ async function undoExtras(ctx, name, a, cp) {
   cp.extras.push(x);
 }
 
-function undoTurnStart(text) { undoTurn = { label: text.replace(/\s+/g, " ").slice(0, 50), book: null, sheets: {}, extras: [], tools: [] }; }
+function undoTurnStart(text) { undoTurn = { label: text.replace(/\s+/g, " ").slice(0, 50), book: null, sheets: {}, pages: {}, extras: [], tools: [] }; }
+
+// إعدادات الطباعة قبل أوّل page_setup على الشيت
+async function undoSnapPage(ctx, id) {
+  const s = ctx.workbook.worksheets.getItem(id), pl = s.pageLayout;
+  s.load("name"); pl.load(PAGE_PROPS);
+  const area = pl.getPrintAreaOrNullObject(), tr = pl.getPrintTitleRowsOrNullObject(), tc = pl.getPrintTitleColumnsOrNullObject();
+  [area, tr, tc].forEach(x => x.load("address"));
+  const hf = pl.headersFooters, d = hf.defaultForAllPages; hf.load("state"); d.load(HF_PARTS);
+  const hb = s.horizontalPageBreaks, vb = s.verticalPageBreaks; hb.load("rowIndex"); vb.load("columnIndex");
+  await ctx.sync();
+  const addr = x => x.isNullObject ? "" : noSheet(x.address);
+  return { id, name: s.name, props: Object.fromEntries(PAGE_PROPS.split(",").map(k => [k, pl[k]])), area: addr(area), rows: addr(tr), cols: addr(tc),
+    state: hf.state, hf: Object.fromEntries(HF_PARTS.split(",").map(k => [k, d[k]])), hb: hb.items.map(b => b.rowIndex), vb: vb.items.map(b => b.columnIndex) };
+}
+
+async function undoPage(ctx, p, liveId, rep) {
+  const s = ctx.workbook.worksheets.getItem(liveId), pl = s.pageLayout;
+  try {
+    for (const [k, v] of Object.entries(p.props)) if (v !== undefined && v !== null)
+      pl[k] = k === "zoom" ? Object.fromEntries(Object.entries(v).filter(([, x]) => x != null)) : v;
+    if (p.area) pl.setPrintArea(p.area); else await clearSheetName(ctx, s, "Print_Area");
+    await clearSheetName(ctx, s, "Print_Titles");
+    if (p.rows) pl.setPrintTitleRows(p.rows);
+    if (p.cols) pl.setPrintTitleColumns(p.cols);
+    const hf = pl.headersFooters, d = hf.defaultForAllPages;
+    hf.state = p.state;
+    for (const [k, v] of Object.entries(p.hf)) d[k] = v || "";
+    s.horizontalPageBreaks.removePageBreaks(); s.verticalPageBreaks.removePageBreaks();
+    p.hb.forEach(r => s.horizontalPageBreaks.add(`A${r + 1}`));
+    p.vb.forEach(c => s.verticalPageBreaks.add(`${colName(c + 1)}1`));
+    await ctx.sync();
+  } catch (e) { rep.failed.push(`إعدادات الطباعة «${p.name}»`); console.warn("MaliAI undo page", e); }
+}
 
 async function undoBeforeTool(name, a) {
   const cp = undoTurn;
@@ -1104,6 +1287,11 @@ async function undoBeforeTool(name, a) {
         // شيت انضاف بهالطلب ما بدّه صورة: التراجع بيحذفه
         if (s.isNullObject || cp.sheets[s.id] || !cp.book.ids.includes(s.id)) continue;
         cp.sheets[s.id] = await undoSnapSheet(ctx, s.id);
+      }
+      if (name === "page_setup" && apiOK("1.9")) {
+        const s = a.sheet ? ctx.workbook.worksheets.getItemOrNullObject(a.sheet) : ctx.workbook.worksheets.getActiveWorksheet();
+        s.load("id"); await ctx.sync();
+        if (!s.isNullObject && !cp.pages[s.id] && cp.book.ids.includes(s.id)) cp.pages[s.id] = await undoSnapPage(ctx, s.id);
       }
       await undoExtras(ctx, name, a, cp);
     });
@@ -1237,6 +1425,7 @@ async function undoApply(cp) {
     });
     for (const snap of snaps) await undoObjects(ctx, snap, rep);
     for (const snap of snaps) await undoCells(ctx, cp, snap, rep);
+    for (const p of Object.values(cp.pages)) await undoPage(ctx, p, liveOf(p.id), rep);
     await tryStep("ترتيب الشيتات", async () => {
       for (const snap of [...snaps].sort((a, b) => a.position - b.position)) sheets.getItem(snap.liveId).position = snap.position;
     });
