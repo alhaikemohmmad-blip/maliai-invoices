@@ -341,6 +341,7 @@ How you work:
 - Deleting by condition (empty rows, duplicates, a value, numbers above or below a limit): use delete_rows_where. Call it first without confirmed: it deletes nothing and returns how many rows match with examples. Show the accountant the count and a few examples, and only after their yes call it again with confirmed: true. Do the same with delete_objects for charts, shapes, pivot tables, tables and named ranges.
 - Removing colors and formatting: use clear_formatting on exactly the range asked (fills, font colors, bold and italic, borders, conditional formatting, drop-down validation, number formats, checkboxes). It never touches the values.
 - Objects over the sheet: add_shape places shapes, lines, arrows and text boxes, positioned by cells so they line up with the data. add_checkboxes puts real tick boxes in cells (TRUE when ticked) or ✓/✗ marks colored green and red. workbook_overview lists the charts, shapes and pivot tables already on each sheet.
+- Sheet tabs: manage_sheets renames, opens (activate), reorders, colors, hides, shows and copies sheets; when the accountant asks to go to a sheet or see one, activate it. move_range moves a table or block of cells like cut and paste, on the same sheet or to another one.
 - The accountant may dictate by voice, so a message can be a speech transcription: read names and numbers with that in mind, and ask when a number looks misheard.
 - Work in blocks: write headers and all formulas of a table in one write_range call, not cell by cell.
 - Building models and reports (budgets, forecasts, cash flow, loan and depreciation schedules, sales tax returns, payroll, KPI summaries), follow financial-modelling practice: keep inputs, calculations and outputs apart; put every assumption (rates, growth, the 16% tax, exchange rates) in its own labelled input cell and reference it, never a number typed inside a formula; input cells in blue font, formulas in black, links to other sheets in green; one consistent formula across each row or column, periods as columns from left to right; units in the labels (JOD, %, months); absolute references ($) only where a formula must point at a fixed cell; avoid merged cells inside data and volatile functions (OFFSET, INDIRECT, TODAY) in calculations; ROUND only where the law or the report needs it; and add check cells that tie the model out (assets = liabilities + equity, the sum of the details = the total, cash closing = opening + in − out) showing 0 or TRUE.
@@ -433,7 +434,20 @@ const EXCEL_TOOLS = [
   { name: "add_checkboxes", description: "Put tick boxes in cells. style checkbox: real Excel checkboxes holding TRUE/FALSE (count ticks with =COUNTIF(range,TRUE)); on an older Excel it falls back to tick_cross. style tick_cross: a ✓/✗ drop-down, green for ✓ and red for ✗. checked sets new checkboxes ticked.",
     input_schema: { type: "object", properties: {
       sheet: { type: "string" }, address: { type: "string" }, style: { type: "string", enum: ["checkbox", "tick_cross"] },
-      checked: { type: "boolean" }, overwrite: { type: "boolean", description: "Replace non-boolean values with checkboxes, only after the accountant agreed" } }, required: ["address"] } }
+      checked: { type: "boolean" }, overwrite: { type: "boolean", description: "Replace non-boolean values with checkboxes, only after the accountant agreed" } }, required: ["address"] } },
+  { name: "manage_sheets", description: "Work with the sheet tabs at the bottom of Excel, in order: rename a sheet (formulas that point at it follow the new name), activate a sheet so the accountant sees it, move a tab before or after another or to a position, color a tab, hide or show a sheet, or copy a sheet.",
+    input_schema: { type: "object", properties: { actions: { type: "array", items: { type: "object", properties: {
+      action: { type: "string", enum: ["rename", "activate", "move", "tab_color", "hide", "show", "copy"] },
+      sheet: { type: "string", description: "The sheet's current name" },
+      new_name: { type: "string", description: "rename: the new name (max 31 characters, none of \\ / ? * [ ] :); copy: the copy's name" },
+      before: { type: "string", description: "move or copy: put it right before this sheet" }, after: { type: "string", description: "move or copy: put it right after this sheet" },
+      position: { type: "integer", description: "move: 0-based tab position, 0 = first" },
+      color: { type: "string", description: "tab_color: hex like #107C41; empty removes the color" } }, required: ["action", "sheet"] } } }, required: ["actions"] } },
+  { name: "move_range", description: "Move a block of cells, such as a whole table with its header, to another place on the same sheet or another sheet, like cut and paste: values, formulas, formats and the Excel table go with it, and formulas elsewhere that pointed at it follow. Give table (a table's name) or address. The destination must be empty unless overwrite is true.",
+    input_schema: { type: "object", properties: {
+      sheet: { type: "string" }, address: { type: "string" }, table: { type: "string", description: "Name of an Excel table to move whole" },
+      to_sheet: { type: "string", description: "Destination sheet; omit for the same sheet" }, to_cell: { type: "string", description: "Top-left cell of the destination" },
+      overwrite: { type: "boolean", description: "true only after the accountant agreed to replace what is there" } }, required: ["to_cell"] } }
 ];
 
 const ws = (ctx, name) => name ? ctx.workbook.worksheets.getItem(name) : ctx.workbook.worksheets.getActiveWorksheet();
@@ -455,12 +469,16 @@ const EXCEL_LABELS = {
   clear_formatting: a => `بشيل ${(a.what && a.what.includes("all_formats")) ? "كل التنسيق" : "الألوان والتنسيق"} من ${a.address || "الشيت"}`,
   delete_objects: a => `${a.confirmed ? "بحذف" : "بعدّ"} ${({ charts: "الرسومات", shapes: "الأشكال", pivots: "جداول Pivot", tables: "الجداول", names: "الأسماء" })[a.kind] || a.kind}`,
   add_shape: a => `برسم ${({ line: "خطّ", arrow: "سهم", textbox: "مربّع نصّ" })[String(a.type).toLowerCase()] || "شكل"} عند ${a.from_cell}${a.to_cell ? "←" + a.to_cell : ""}`,
-  add_checkboxes: a => `بحطّ ${a.style === "tick_cross" ? "✓/✗" : "مربّعات صح"} بـ ${a.address}`
+  add_checkboxes: a => `بحطّ ${a.style === "tick_cross" ? "✓/✗" : "مربّعات صح"} بـ ${a.address}`,
+  manage_sheets: a => (Array.isArray(a.actions) ? a.actions : []).map(x => ({ rename: `بغيّر اسم «${x.sheet}» لـ«${x.new_name}»`, activate: `بفتح «${x.sheet}»`,
+    move: `بنقل «${x.sheet}»${x.before ? " قبل «" + x.before + "»" : x.after ? " بعد «" + x.after + "»" : ""}`, tab_color: `بلوّن «${x.sheet}»`, hide: `بخبّي «${x.sheet}»`,
+    show: `بظهّر «${x.sheet}»`, copy: `بنسخ «${x.sheet}»` })[x.action] || x.action).join("، ") || "بالشيتات",
+  move_range: a => `بنقل ${a.table ? "جدول «" + a.table + "»" : a.address} لـ ${a.to_sheet ? "«" + a.to_sheet + "» " : ""}${a.to_cell}`
 };
 
 const EXCEL_HANDLERS = {
   workbook_overview: () => Excel.run(async ctx => {
-    const sheets = ctx.workbook.worksheets; sheets.load("items/name");
+    const sheets = ctx.workbook.worksheets; sheets.load("items/name,items/visibility");
     const active = sheets.getActiveWorksheet(); active.load("name");
     const sel = ctx.workbook.getSelectedRange(); sel.load("address");
     const tables = ctx.workbook.tables; tables.load("items/name");
@@ -479,7 +497,7 @@ const EXCEL_HANDLERS = {
     const objsOf = i => {
       const o = {};
       for (const [k, c] of Object.entries(objs[i])) if (c.items.length) o[k] = c.items.slice(0, 30).map(x => x.name);
-      return Object.keys(o).length ? { objects: o } : {};
+      return { ...(Object.keys(o).length ? { objects: o } : {}), ...(sheets.items[i].visibility !== "Visible" ? { hidden: true } : {}) };
     };
     return { active_sheet: active.name, selection: sel.address,
       sheets: sheets.items.map((s, i) => used[i].isNullObject ? { name: s.name, empty: true, ...objsOf(i) }
@@ -842,6 +860,78 @@ const EXCEL_HANDLERS = {
       ...(style === "checkbox" ? { note: "This Excel has no in-cell checkboxes, so a ✓/✗ drop-down with colors was used instead." } : {}) };
   }),
 
+  // الشيتات اللي تحت: اسم، فتح، ترتيب، لون، إخفاء، نسخ
+  manage_sheets: ({ actions }) => Excel.run(async ctx => {
+    if (!Array.isArray(actions) || !actions.length) throw new Error("actions must be a non-empty array");
+    const sheets = ctx.workbook.worksheets, done = [];
+    for (const [i, a] of actions.entries()) {
+      try {
+        const s = sheets.getItem(a.sheet), rel = a.before || a.after;
+        if (a.action === "rename") {
+          const n = String(a.new_name || "").trim();
+          if (!n || n.length > 31 || /[\\\/?*\[\]:]/.test(n) || /^'|'$/.test(n)) throw new Error("new_name must be 1-31 characters, without \\ / ? * [ ] : and not starting or ending with '");
+          s.name = n;
+        } else if (a.action === "activate") s.activate();
+        else if (a.action === "move") {
+          let pos = a.position;
+          if (rel) {
+            const t = sheets.getItem(rel); t.load("position"); s.load("position"); await ctx.sync();
+            pos = t.position + (a.after ? 1 : 0);
+            if (s.position < pos) pos--;
+          }
+          if (!Number.isInteger(pos) || pos < 0) throw new Error("give before, after or position");
+          s.position = pos;
+        } else if (a.action === "tab_color") s.tabColor = a.color || "";
+        else if (a.action === "hide") s.visibility = "Hidden";
+        else if (a.action === "show") s.visibility = "Visible";
+        else if (a.action === "copy") {
+          if (!apiOK("1.10")) throw new Error("this Excel version can't copy sheets (needs ExcelApi 1.10)");
+          const c = s.copy(a.before ? "Before" : a.after ? "After" : "End", rel ? sheets.getItem(rel) : undefined);
+          if (a.new_name) c.name = a.new_name;
+          c.load("name"); await ctx.sync();
+          done.push({ action: "copy", sheet: a.sheet, copy: c.name });
+          continue;
+        } else throw new Error("unknown action " + a.action);
+        await ctx.sync();
+        done.push({ action: a.action, sheet: a.sheet, ...(a.new_name ? { new_name: a.new_name } : {}) });
+      } catch (e) {
+        throw new Error(`action ${i + 1} (${a.action} «${a.sheet}») failed: ${(e.debugInfo && e.debugInfo.message) || e.message}` + (done.length ? `; actions 1-${done.length} were done` : ""));
+      }
+    }
+    sheets.load("items/name,items/visibility"); await ctx.sync();
+    return { done, tabs_in_order: sheets.items.map(s => s.name + (s.visibility !== "Visible" ? " (hidden)" : "")) };
+  }),
+
+  // نقل جدول أو نطاق زي القصّ واللصق: المعادلات اللي بتأشّر عليه بتلحقه
+  move_range: ({ sheet, address, table, to_sheet, to_cell, overwrite }) => Excel.run(async ctx => {
+    if (!table && !address) throw new Error("give table or address");
+    const t = table ? ctx.workbook.tables.getItem(table) : null;
+    const srcSheet = t ? t.worksheet : ws(ctx, sheet), src = t ? t.getRange() : srcSheet.getRange(address);
+    src.load("address,rowIndex,columnIndex,rowCount,columnCount"); srcSheet.load("name");
+    const dSheet = to_sheet ? ctx.workbook.worksheets.getItem(to_sheet) : srcSheet, d0 = dSheet.getRange(to_cell).getCell(0, 0);
+    dSheet.load("name"); d0.load("rowIndex,columnIndex");
+    await ctx.sync();
+    if (src.rowCount * src.columnCount > MAX_SCAN) throw new Error(`${src.address} is too big to move in one call`);
+    const dest = dSheet.getRangeByIndexes(d0.rowIndex, d0.columnIndex, src.rowCount, src.columnCount);
+    dest.load("address,formulas"); await ctx.sync();
+    const same = dSheet.name === srcSheet.name;
+    const inSrc = (i, j) => same && d0.rowIndex + i >= src.rowIndex && d0.rowIndex + i < src.rowIndex + src.rowCount
+      && d0.columnIndex + j >= src.columnIndex && d0.columnIndex + j < src.columnIndex + src.columnCount;
+    if (!overwrite) {
+      let filled = 0;
+      dest.formulas.forEach((row, i) => row.forEach((v, j) => { if (v !== "" && !inSrc(i, j)) filled++; }));
+      if (filled) throw new Error(`${dest.address} already has ${filled} non-empty cells. Pick an empty place, or ask the accountant and call again with overwrite: true.`);
+    }
+    if (apiOK("1.11")) src.moveTo(dest);
+    else {   // إكسل قديم: نسخ وبعدين تفضية (المعادلات ما بتلحق)
+      if (t) throw new Error("this Excel version can't move a table (needs ExcelApi 1.11)");
+      if (dest.formulas.some((row, i) => row.some((v, j) => inSrc(i, j)))) throw new Error("on this Excel version the destination can't overlap the source");
+      dest.copyFrom(src, "All"); src.clear("All");
+    }
+    await ctx.sync();
+    return { moved: src.address, to: dest.address, ...(apiOK("1.11") ? {} : { note: "older Excel: copied then cleared, so formulas that pointed at the old place did not follow" }) };
+  }),
+
   create_pivot: ({ name, source_sheet, source_address, dest_sheet, dest_cell, rows, columns = [], values }) => Excel.run(async ctx => {
     const src = ctx.workbook.worksheets.getItem(source_sheet).getRange(source_address);
     const pt = ctx.workbook.pivotTables.add(name, src, ws(ctx, dest_sheet).getRange(dest_cell));
@@ -877,8 +967,11 @@ const UNDO_LABEL = "↩️ تراجع عن تعديلات هالطلب";
 let undoTurn = null;
 const undoStack = [];
 const undoMutates = (name, a) => name in EXCEL_HANDLERS && !UNDO_SAFE.has(name)
-  && !(["delete_rows_where", "delete_objects", "change_structure"].includes(name) && !a.confirmed);
+  && !(["delete_rows_where", "delete_objects", "change_structure"].includes(name) && !a.confirmed)
+  && !(name === "manage_sheets" && Array.isArray(a.actions) && a.actions.every(x => x.action === "activate"));
 const undoSheetsOf = (name, a) => name === "create_pivot" ? [a.dest_sheet]
+  : name === "manage_sheets" ? (Array.isArray(a.actions) ? a.actions : []).map(x => x.sheet).filter(Boolean)
+  : name === "move_range" ? [a.table ? null : a.sheet || "", a.to_sheet || null].filter(x => x !== null)
   : name === "add_sheet" || name === "define_name" || (name === "delete_objects" && a.kind === "names") ? [] : [a.sheet || ""];
 // نصّ شكله رقم أو تاريخ («00123») لازم يرجع نصّ، مش رقم
 const looksTyped = v => typeof v === "string" && v[0] !== "=" && (/^(true|false)$/i.test(v) || (/\d/.test(v) && /^[\s\d.,:\/+\-%()$٠-٩٫٬]+$/.test(v)));
@@ -903,16 +996,19 @@ function undoBlocks(rows, cols, changed) {
   return out;
 }
 
+// كل شيت بينعرف برقمه الثابت (id) مش باسمه: لو انغيّر اسمه بالطلب، التراجع بيرجّع الاسم بدل ما يحذفه
 async function undoSnapBook(ctx) {
   const sh = ctx.workbook.worksheets, nm = ctx.workbook.names, act = sh.getActiveWorksheet();
-  sh.load("name"); nm.load("name,formula"); act.load("name");
+  sh.load("id,name"); nm.load("name,formula"); act.load("id");
   await ctx.sync();
-  return { sheets: sh.items.map(s => s.name), names: nm.items.map(n => ({ name: n.name, formula: n.formula })), active: act.name };
+  return { ids: sh.items.map(s => s.id), names: nm.items.map(n => ({ name: n.name, formula: n.formula })), active: act.id };
 }
 
-async function undoSnapSheet(ctx, name) {
-  const s = ctx.workbook.worksheets.getItem(name);
-  s.load("position");
+async function undoSnapSheet(ctx, id) {
+  const s = ctx.workbook.worksheets.getItem(id);
+  s.load("name,position,visibility" + (apiOK("1.7") ? ",tabColor" : ""));
+  await ctx.sync();
+  const name = s.name;
   const u = s.getUsedRangeOrNullObject(); u.load("rowIndex,columnIndex,rowCount,columnCount");
   const charts = s.charts, pivots = s.pivotTables, tables = s.tables, shapes = apiOK("1.9") ? s.shapes : null, cfs = s.getRange().conditionalFormats;
   [charts, pivots, shapes].forEach(c => c && c.load("name"));
@@ -922,7 +1018,8 @@ async function undoSnapSheet(ctx, name) {
   await ctx.sync();
   const tRanges = tables.items.map(t => { const r = t.getRange(); r.load("address"); return r; });
   await ctx.sync();
-  const snap = { name, position: s.position, charts: undoNames(charts), pivots: undoNames(pivots), shapes: undoNames(shapes), cfIds: cfs.items.map(c => c.id),
+  const snap = { id, name, position: s.position, visibility: s.visibility, tabColor: apiOK("1.7") ? s.tabColor : null,
+    charts: undoNames(charts), pivots: undoNames(pivots), shapes: undoNames(shapes), cfIds: cfs.items.map(c => c.id),
     tables: tables.items.map((t, i) => ({ name: t.name, style: t.style, address: tRanges[i].address.split("!").pop() })),
     freeze: fz ? (fz.isNullObject ? "" : fz.address.split("!").pop()) : null, used: null };
   if (u.isNullObject) return snap;
@@ -969,11 +1066,11 @@ async function undoExtras(ctx, name, a, cp) {
   const cb = apiOK("1.18") && ((name === "add_checkboxes" && a.style !== "tick_cross") || (name === "clear_formatting" && what.includes("checkboxes")));
   if (!dv && !cb) return;
   const s = ws(ctx, a.sheet), r = a.address ? s.getRange(a.address) : s.getUsedRangeOrNullObject();
-  s.load("name"); r.load("address");
+  s.load("id"); r.load("address");
   if (dv) r.dataValidation.load("type");
   await ctx.sync();
-  if (r.isNullObject || !cp.book.sheets.includes(s.name)) return;
-  const x = { sheet: s.name, address: r.address.split("!").pop(), dv: null, cb: null };
+  if (r.isNullObject || !cp.book.ids.includes(s.id)) return;
+  const x = { sheet: s.id, address: r.address.split("!").pop(), dv: null, cb: null };
   if (dv) {
     x.dv = { type: r.dataValidation.type, rule: null };
     if (!["None", "Inconsistent", "MixedCriteria"].includes(r.dataValidation.type)) {
@@ -995,12 +1092,18 @@ async function undoBeforeTool(name, a) {
   try {
     await Excel.run(async ctx => {
       if (!cp.book) cp.book = await undoSnapBook(ctx);
-      for (const want of undoSheetsOf(name, a)) {
+      const wants = undoSheetsOf(name, a);
+      if (name === "move_range" && a.table) {   // الجدول ممكن يكون على شيت مش مفتوح
+        const t = ctx.workbook.tables.getItemOrNullObject(a.table); t.load("name"); await ctx.sync();
+        if (!t.isNullObject) { t.worksheet.load("name"); await ctx.sync(); wants.push(t.worksheet.name); }
+        if (!a.to_sheet) wants.push(...wants.slice(-1));
+      }
+      for (const want of wants) {
         const s = want ? ctx.workbook.worksheets.getItemOrNullObject(want) : ctx.workbook.worksheets.getActiveWorksheet();
-        s.load("name"); await ctx.sync();
+        s.load("id"); await ctx.sync();
         // شيت انضاف بهالطلب ما بدّه صورة: التراجع بيحذفه
-        if (s.isNullObject || cp.sheets[s.name] || !cp.book.sheets.includes(s.name)) continue;
-        cp.sheets[s.name] = await undoSnapSheet(ctx, s.name);
+        if (s.isNullObject || cp.sheets[s.id] || !cp.book.ids.includes(s.id)) continue;
+        cp.sheets[s.id] = await undoSnapSheet(ctx, s.id);
       }
       await undoExtras(ctx, name, a, cp);
     });
@@ -1020,23 +1123,37 @@ function undoOutside(cur, U) {   // أجزاء النطاق المستعمل ه�
   return out;
 }
 
-async function undoSheet(ctx, cp, snap, rep) {
-  const s = ctx.workbook.worksheets.getItem(snap.name);
-  const step = async (what, fn) => { try { await fn(); await ctx.sync(); } catch (e) { rep.failed.push(`${what} «${snap.name}»`); console.warn("MaliAI undo", what, e); } };
-  await step("الأشياء فوق الشيت", async () => {
+// التراجع على مرحلتين: أوّل إشي الأشياء فوق كل الشيتات (عشان اسم جدول انتقل لشيت ثاني يتحرّر)، وبعدين الخلايا
+const undoStep = (ctx, rep, snap) => async (what, fn) => {
+  try { await fn(); await ctx.sync(); } catch (e) { rep.failed.push(`${what} «${snap.name}»`); console.warn("MaliAI undo", what, e); }
+};
+
+async function undoObjects(ctx, snap, rep) {
+  const s = ctx.workbook.worksheets.getItem(snap.liveId);
+  await undoStep(ctx, rep, snap)("الأشياء فوق الشيت", async () => {
     const charts = s.charts, pivots = s.pivotTables, tables = s.tables, shapes = snap.shapes ? s.shapes : null, cfs = s.getRange().conditionalFormats;
-    [charts, pivots, tables, shapes].forEach(c => c && c.load("name")); cfs.load("id");
+    [charts, pivots, shapes].forEach(c => c && c.load("name")); tables.load("name"); cfs.load("id");
+    await ctx.sync();
+    const tRanges = tables.items.map(t => { const r = t.getRange(); r.load("address"); return r; });
     await ctx.sync();
     const fresh = (c, was) => c.items.filter(x => !was.includes(x.name)), gone = (c, was) => was.filter(n => !c.items.some(x => x.name === n));
     fresh(pivots, snap.pivots).forEach(x => x.delete());
     fresh(charts, snap.charts).forEach(x => x.delete());
     if (shapes) fresh(shapes, snap.shapes).forEach(x => x.delete());
-    fresh(tables, snap.tables.map(t => t.name)).forEach(x => x.convertToRange());
     cfs.items.filter(x => !snap.cfIds.includes(x.id)).forEach(x => x.delete());
+    // جدول جديد، أو جدول انتقل أو تغيّر حجمه: بيرجع نطاق عادي، واللي كان بيرجع جدول بمكانه القديم بعد الخلايا
+    tables.items.forEach((x, i) => {
+      const was = snap.tables.find(t => t.name === x.name);
+      if (!was || was.address !== tRanges[i].address.split("!").pop()) x.convertToRange();
+    });
+    snap.missingTables = snap.tables.filter(t => !tables.items.some((x, i) => x.name === t.name && tRanges[i].address.split("!").pop() === t.address));
     if (!snap.recreated) rep.lost.push(...gone(charts, snap.charts).map(n => `الرسمة «${n}»`), ...gone(pivots, snap.pivots).map(n => `الـPivot «${n}»`),
       ...(shapes ? gone(shapes, snap.shapes).map(n => `الشكل «${n}»`) : []));
-    snap.missingTables = snap.tables.filter(t => !tables.items.some(x => x.name === t.name));
   });
+}
+
+async function undoCells(ctx, cp, snap, rep) {
+  const s = ctx.workbook.worksheets.getItem(snap.liveId), step = undoStep(ctx, rep, snap);
   if (snap.tooBig) rep.lost.push(`خلايا «${snap.name}» (أكبر من ${MAX_UNDO_CELLS.toLocaleString("en")} خلية)`);
   else {
     const U = snap.used, area = () => s.getRangeByIndexes(U.row, U.col, U.rows, U.cols);
@@ -1082,43 +1199,64 @@ async function undoSheet(ctx, cp, snap, rep) {
     s.freezePanes.unfreeze();
     if (snap.freeze) s.freezePanes.freezeAt(snap.freeze);
   });
+  if (snap.tabColor !== null) await step("لون الشيت", async () => {
+    s.load("tabColor"); await ctx.sync();
+    if (s.tabColor !== snap.tabColor) s.tabColor = snap.tabColor;
+  });
 }
 
 async function undoApply(cp) {
   const rep = { lost: [], failed: [] };
   await Excel.run(async ctx => {
-    const wb = ctx.workbook, sheets = wb.worksheets;
-    sheets.load("name"); await ctx.sync();
-    const had = new Set(cp.book.sheets), now = sheets.items.map(s => s.name);
-    // شيت انحذف بهالطلب بيرجع بخلاياه (الرسومات والأشكال اللي كانت عليه ما بترجع)
-    for (const snap of Object.values(cp.sheets)) if (!now.includes(snap.name)) {
-      const s = sheets.add(snap.name); await ctx.sync();
-      try { s.position = snap.position; await ctx.sync(); } catch (e) {}
-      snap.recreated = true;
+    const wb = ctx.workbook, sheets = wb.worksheets, snaps = Object.values(cp.sheets);
+    const tryStep = async (what, fn) => { try { await fn(); await ctx.sync(); } catch (e) { rep.failed.push(what); console.warn("MaliAI undo", what, e); } };
+    sheets.load("id,name,visibility"); await ctx.sync();
+    const had = new Set(cp.book.ids), live = new Map(sheets.items.map(s => [s.id, s]));
+    const liveOf = id => (snaps.find(x => x.id === id) || {}).liveId || id;
+    // ١) اللي انخبّى بيرجع يبيّن (إكسل ما بيحذف آخر شيت ظاهر)، وبعدين الشيتات الجديدة بتنحذف
+    await tryStep("إظهار الشيتات", async () => {
+      for (const snap of snaps) { const s = live.get(snap.id); if (s && s.visibility !== snap.visibility && snap.visibility === "Visible") s.visibility = "Visible"; }
+    });
+    await tryStep("حذف الشيتات الجديدة", async () => { sheets.items.filter(s => !had.has(s.id)).forEach(s => s.delete()); });
+    // ٢) شيت انحذف بهالطلب بيرجع بخلاياه (الرسومات والأشكال اللي كانت عليه ما بترجع)
+    for (const snap of snaps) {
+      snap.liveId = snap.id;
+      if (live.has(snap.id)) continue;
+      const s = sheets.add("~" + Date.now().toString(36)); s.load("id"); await ctx.sync();
+      snap.liveId = s.id; snap.recreated = true;
       rep.lost.push(...[...snap.charts, ...(snap.shapes || []), ...snap.pivots].map(n => `«${n}» اللي كان على «${snap.name}»`));
     }
-    for (const snap of Object.values(cp.sheets)) if (had.has(snap.name)) await undoSheet(ctx, cp, snap, rep);
+    // ٣) الأسماء: أوّل إشي أسماء مؤقّتة، عشان لو شيتين بدّلوا أسماءهم ما يتعارضوا
+    await tryStep("أسماء الشيتات", async () => {
+      const s = snaps.map(snap => { const x = sheets.getItem(snap.liveId); x.load("name"); return x; });
+      await ctx.sync();
+      const change = snaps.filter((snap, i) => s[i].name !== snap.name);
+      change.forEach((snap, i) => { sheets.getItem(snap.liveId).name = `~u${i}~${Date.now() % 1e6}`; });
+      await ctx.sync();
+      change.forEach(snap => { sheets.getItem(snap.liveId).name = snap.name; });
+    });
+    for (const snap of snaps) await undoObjects(ctx, snap, rep);
+    for (const snap of snaps) await undoCells(ctx, cp, snap, rep);
+    await tryStep("ترتيب الشيتات", async () => {
+      for (const snap of [...snaps].sort((a, b) => a.position - b.position)) sheets.getItem(snap.liveId).position = snap.position;
+    });
+    await tryStep("إخفاء الشيتات", async () => {
+      for (const snap of snaps) if (snap.visibility !== "Visible") sheets.getItem(snap.liveId).visibility = snap.visibility;
+    });
     for (const x of [...cp.extras].reverse()) {
       try {
-        const r = sheets.getItem(x.sheet).getRange(x.address);
+        const r = sheets.getItem(liveOf(x.sheet)).getRange(x.address);
         if (x.dv) { r.dataValidation.clear(); if (x.dv.rule) r.dataValidation.rule = x.dv.rule; }
         if (x.cb) r.control = { type: x.cb === "Checkbox" ? "Checkbox" : "Empty" };
         await ctx.sync();
       } catch (e) { rep.failed.push(`قوائم الإدخال ومربّعات الصح بـ ${x.address}`); }
     }
-    if (cp.tools.some(t => t === "define_name" || t === "delete_objects")) {
-      try {
-        const nm = wb.names; nm.load("name"); await ctx.sync();
-        nm.items.filter(n => !cp.book.names.some(b => b.name === n.name)).forEach(n => n.delete());
-        cp.book.names.filter(b => !nm.items.some(n => n.name === b.name)).forEach(b => wb.names.add(b.name, b.formula));
-        await ctx.sync();
-      } catch (e) { rep.failed.push("أسماء النطاقات"); }
-    }
-    try {   // الشيتات اللي انضافت بهالطلب بتنحذف
-      sheets.items.filter(s => !had.has(s.name)).forEach(s => s.delete());
-      await ctx.sync();
-    } catch (e) { rep.failed.push("حذف الشيتات الجديدة"); }
-    try { sheets.getItem(cp.book.active).activate(); await ctx.sync(); } catch (e) {}
+    if (cp.tools.some(t => t === "define_name" || t === "delete_objects")) await tryStep("أسماء النطاقات", async () => {
+      const nm = wb.names; nm.load("name"); await ctx.sync();
+      nm.items.filter(n => !cp.book.names.some(b => b.name === n.name)).forEach(n => n.delete());
+      cp.book.names.filter(b => !nm.items.some(n => n.name === b.name)).forEach(b => wb.names.add(b.name, b.formula));
+    });
+    try { sheets.getItem(liveOf(cp.book.active)).activate(); await ctx.sync(); } catch (e) {}
   });
   return rep;
 }
