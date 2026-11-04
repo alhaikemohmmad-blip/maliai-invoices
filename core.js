@@ -72,10 +72,15 @@ const PRICES = [
 // كتابة الكاش: ١.٢٥ من سعر الإدخال لمدّة ٥ دقايق، و٢ لمدّة ساعة
 function costOf(model, u) {
   const [, inp, out, read] = PRICES.find(([k]) => String(model || "").startsWith(k)) || PRICES[4];
-  const w1h = (u.cache_creation && u.cache_creation.ephemeral_1h_input_tokens) || 0;
-  const w5m = Math.max(0, (u.cache_creation_input_tokens || 0) - w1h);
+  const one = x => {
+    const w1h = (x.cache_creation && x.cache_creation.ephemeral_1h_input_tokens) || 0;
+    const w5m = Math.max(0, (x.cache_creation_input_tokens || 0) - w1h);
+    return ((x.input_tokens || 0) * inp + (x.output_tokens || 0) * out + (x.cache_read_input_tokens || 0) * read + w5m * inp * 1.25 + w1h * inp * 2) / 1e6;
+  };
   const searches = (u.server_tool_use && u.server_tool_use.web_search_requests) || 0;   // البحث بالنت: ١٠$ لكل ألف بحثة
-  return ((u.input_tokens || 0) * inp + (u.output_tokens || 0) * out + (u.cache_read_input_tokens || 0) * read + w5m * inp * 1.25 + w1h * inp * 2) / 1e6 + searches * 0.01;
+  // مع التلخيص: الأرقام فوق ما بتشمل نداء التلخيص، فمنجمع كل iterations
+  const its = Array.isArray(u.iterations) && u.iterations.length ? u.iterations : [u];
+  return its.reduce((s, x) => s + one(x), 0) + searches * 0.01;
 }
 const SPEND_KEY = "maliai.spend";
 const thisMonth = () => new Date().toISOString().slice(0, 7);
@@ -280,16 +285,29 @@ const VAULT_TOOLS = [
 // شكل طلب المحادثة ثابت بالزبط عشان الكاش: الأدوات والتعليمات ما بتتغيّر أبداً (بينكاشوا ساعة وبيخدموا كل المحادثات)،
 // الخزنة بتنحطّ بأوّل رسالة بالمحادثة مش بالتعليمات، وآخر السجلّ بينكاش لحاله مع كل نداء
 // كل صفحة بتقدر تثبّت نموذجها (MALI.model): إكسل Sonnet 5.5 من الإعدادات، ووورد Haiku 5.5
+// الكلفة الكبيرة كانت حجم المحادثة (٢٠٠–٧٥٠ ألف توكن بكل نداء، ٤ تشرين ثاني ٢٠٢٦)، فـ:
+// ١) لمّا المحادثة توصل COMPACT_AT، Anthropic بتلخّص القديم بنفسها (compaction) وبنكمّل من الملخّص
+// ٢) آخر المحادثة بينكاش ساعة مش ٥ دقايق: المحاسب بيرجع بعد ربع ساعة، وبدل ما تنكتب المحادثة كلها من جديد بتنقرا من الكاش
+const COMPACT_AT = 80000;   // ponytail: أقلّ إشي 50 ألف؛ أصغر = أرخص بس بينسى التفاصيل أسرع
+const COMPACT_PROMPT = `Summarize the conversation so far inside <summary></summary> tags so the work can continue in a fresh context window.
+Keep: what the accountant asked for (in their Arabic wording), which workbook, sheets, ranges and tables were read or changed and how, numbers and results later turns may need, decisions and preferences the accountant stated, attached files and their vault paths, and anything still pending or promised.
+Leave out raw cell dumps that can be read again with read_range.
+Do not call any tools while writing this summary; respond with text only.`;
 const chatModel = c => MALI.model || c.model;
-const chatParams = (c, messages) => ({
-  model: chatModel(c), max_tokens: 16000,
+const chatParams = (c, messages) => {
   // fallbacks بيشتغل على هالنماذج بس (Haiku ما بيدعمه)
-  ...(/^claude-(opus-5|fable-5|sonnet-5-5)/.test(chatModel(c)) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" } : {}),
-  output_config: { effort: MALI.effort || "medium" },
-  cache_control: { type: "ephemeral" },
-  system: [{ type: "text", text: MALI.system, cache_control: { type: "ephemeral", ttl: "1h" } }],
-  tools: MALI.tools, messages
-});
+  const fb = /^claude-(opus-5|fable-5|sonnet-5-5)/.test(chatModel(c));
+  return {
+    model: chatModel(c), max_tokens: 16000,
+    betas: [...(fb ? ["server-side-fallback-2026-07-01"] : []), "compact-2026-01-12"],
+    ...(fb ? { fallbacks: "default" } : {}),
+    output_config: { effort: MALI.effort || "medium" },
+    cache_control: { type: "ephemeral", ttl: "1h" },
+    context_management: { edits: [{ type: "compact_20260112", trigger: { type: "input_tokens", value: COMPACT_AT }, instructions: COMPACT_PROMPT }] },
+    system: [{ type: "text", text: MALI.system, cache_control: { type: "ephemeral", ttl: "1h" } }],
+    tools: MALI.tools, messages
+  };
+};
 
 const VAULT_LABELS = {
   vault_search: a => `🧠 بدوّر بالخزنة عن «${a.query}»`, vault_read: a => `🧠 بقرأ ${a.path}${a.from_line > 1 ? " من سطر " + a.from_line : ""}`,
@@ -662,6 +680,13 @@ async function chatSend() {
       cached += u.cache_read_input_tokens || 0;
       total += (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
       CHAT.push({ role: "assistant", content: msg.content });
+      // انعمل تلخيص: Anthropic بتتجاهل كل إشي قبله، فمنشيله من هون كمان عشان الطلب والتخزين يضلّوا صغار
+      // (لو التلخيص فشل content بيكون null، ومنخلّي المحادثة زي ما هي)
+      if (msg.content.some(b => b.type === "compaction" && b.content)) {
+        CHAT = CHAT.slice(-1);
+        ctxSent = false;   // فهرس الخزنة كان بأوّل رسالة وراح معها، فبينبعت مرّة ثانية مع الرسالة الجاية
+        say("step", "🗜️ المحادثة طوّلت، فلخّصت القديم منها عشان تضلّ رخيصة. الملفّات والذاكرة محفوظين.");
+      }
       for (const b of msg.content) if (b.type === "text" && b.text.trim()) say("ai", b.text.trim());
       saveChat();
       if (msg.stop_reason === "refusal") { say("err", "Claude رفض هالطلب."); break; }

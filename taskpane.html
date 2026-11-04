@@ -109,7 +109,7 @@
   <small>المفتاح بينحفظ على جهازك بس، مش بكود الصفحة. الكتابة بالصوت مجّانية وما بدها مفتاح.</small>
   <button id="save" type="button">احفظ</button>
 </details>
-<script src="core.js?v=20261104"></script>
+<script src="core.js?v=20261104b"></script>
 <script>
 // الأعمدة الجديدة بتنضاف بالآخر عشان الصفوف القديمة بالشيت تضلّ تحت عناوينها
 const INV_HEAD  = ["الملف", "المورّد", "الرقم الضريبي", "رقم الفاتورة", "التاريخ", "العملة", "قبل الضريبة", "الضريبة", "الإجمالي", "ملاحظات المحاسب", "الحساب", "نسبة الضريبة %"];
@@ -592,10 +592,25 @@ const EXCEL_HANDLERS = {
   }),
 
   read_range: ({ sheet, address }) => Excel.run(async ctx => {
-    const r = ws(ctx, sheet).getRange(address); r.load("address,rowCount,columnCount"); await ctx.sync();
+    const r = ws(ctx, sheet).getRange(address); r.load("address,rowCount,columnCount,columnIndex"); await ctx.sync();
     if (r.rowCount * r.columnCount > MAX_CELLS) throw new Error(`${r.address} has ${r.rowCount * r.columnCount} cells; read at most ${MAX_CELLS} per call`);
     r.load("values,formulas,numberFormat"); await ctx.sync();
-    return { address: r.address, values: r.values, formulas: r.formulas, number_formats: r.numberFormat };
+    // نفس المعلومات بأقلّ توكنز (كل قراءة بتضلّ بالمحادثة وبتنحسب بكل نداء بعدها):
+    // المعادلات بس للأعمدة اللي فيها معادلة (من أوّل صفّ بالنطاق نزولاً)، والتنسيق مرّة لكل عمود إذا ما تغيّر نزولاً
+    const out = { address: r.address, values: r.values };
+    const isF = f => typeof f === "string" && f[0] === "=", letter = j => colName(r.columnIndex + j + 1);
+    const fcols = {};
+    r.formulas[0].forEach((_, j) => { const c = r.formulas.map(row => isF(row[j]) ? row[j] : null); if (c.some(Boolean)) fcols[letter(j)] = c; });
+    if (Object.keys(fcols).length) out.formulas_by_column = fcols;
+    const cols = r.numberFormat[0].map((_, j) => r.numberFormat.map(row => row[j]));
+    const same = a => a.every(x => x === a[0]);
+    if (cols.every(same) && cols.every(c => c[0] === cols[0][0])) out.number_format = cols[0][0];
+    else {   // عمود فيه أكثر من تنسيق (عادةً العنوان General والباقي أرقام): [التنسيق، عدد الصفوف] من فوق لتحت
+      const runs = c => c.reduce((a, x) => (a.length && a[a.length - 1][0] === x ? a[a.length - 1][1]++ : a.push([x, 1]), a), []);
+      out.number_formats_by_column = Object.fromEntries(cols.map((c, j) => [letter(j), same(c) ? c[0] : runs(c)]));
+      out.note = "number_formats_by_column: a string covers the whole column; a list gives runs of [format, row count] from the top";
+    }
+    return out;
   }),
 
   // تدقيق المعادلات: من وين جاي الرقم، ومين بيعتمد عليه
