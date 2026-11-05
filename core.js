@@ -8,7 +8,10 @@ const PROVIDERS = {
   custom:     { label: "مخصّص (صيغة OpenAI)", url: "", model: "" }
 };
 const CFG_KEY = "maliai.invoices.cfg";
-const MAX_SIDE = 1600;    // أكبر ضلع للصورة المرسلة: أصغر = أسرع رفع
+// أوضح صورة بيقبلها Sonnet/Opus 5.5 بدون ما يصغّرها: أطول ضلع 2576 وأكثر إشي 4784 مربّع 28×28 (حوالي 3.7 ميغابكسل)؛
+// الأرقام الصغيرة والمكتوبة بخطّ اليد بتنقرا أصحّ، والكلفة لسّا قليلة (حوالي سنت للصفحة)
+const MAX_SIDE = 2576, MAX_PIXELS = 4784 * 28 * 28 * 0.95;
+const fitScale = (w, h) => Math.min(1, MAX_SIDE / Math.max(w, h), Math.sqrt(MAX_PIXELS / (w * h)));
 const MAX_PAGES = 3;      // ponytail: أوّل 3 صفحات من كل PDF/TIFF، زيدها إذا في فواتير أطول
 const MAX_TEXT = 60000;   // ponytail: أوّل 60 ألف حرف من الملفات النصّيّة (Excel/Word/XML)
 const PARALLEL = 4;       // فواتير بنفس الوقت، نزّلها إذا المزوّد بيرجّع 429
@@ -22,6 +25,8 @@ const LIBS = {
   utif:    "https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.js",
   jszip:   "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
   qr:      "https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js",
+  // الباركود العادي: CODE128 وEAN-13/8 وUPC وCODE39 وITF-14 وغيرها
+  barcode: "https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.1/JsBarcode.all.min.js",
   // كاشف الكلام (Silero VAD): بيعرف وين بتبلّش وبتخلّص كل جملة
   ort:     "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.wasm.min.js",
   vad:     "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/bundle.min.js"
@@ -139,10 +144,11 @@ function canvasFor(w, h) {
   return [c, g];
 }
 function shrink(src, w, h) {   // src: صورة أو canvas بحجمها الأصلي
-  const s = Math.min(1, MAX_SIDE / Math.max(w, h));
+  const s = fitScale(w, h);
   const [c, g] = canvasFor(w * s, h * s);
+  g.imageSmoothingQuality = "high";
   g.drawImage(src, 0, 0, c.width, c.height);
-  return c.toDataURL("image/jpeg", 0.85);
+  return c.toDataURL("image/jpeg", 0.9);
 }
 const isPdf = (file, ext) => file.type === "application/pdf" || ext === "pdf";
 async function openPdf(file) {
@@ -152,11 +158,11 @@ async function openPdf(file) {
 async function pdfPageImage(pdf, n) {
   const page = await pdf.getPage(n);
   const v1 = page.getViewport({ scale: 1 });
-  const vp = page.getViewport({ scale: MAX_SIDE / Math.max(v1.width, v1.height) });
+  const big = Math.max(v1.width, v1.height), vp = page.getViewport({ scale: fitScale(v1.width * MAX_SIDE / big, v1.height * MAX_SIDE / big) * MAX_SIDE / big });
   const [c, g] = canvasFor(vp.width, vp.height);
   // intent "print": الرسم ما بيستنّى requestAnimationFrame، اللي بيوقف إذا اللوحة مخفيّة
   await page.render({ canvasContext: g, viewport: vp, intent: "print" }).promise;
-  return c.toDataURL("image/jpeg", 0.85);
+  return c.toDataURL("image/jpeg", 0.9);
 }
 async function toParts(file) {
   const ext = (file.name || "").toLowerCase().split(".").pop();
@@ -205,7 +211,7 @@ async function toParts(file) {
 
 // ---------- نداء واحد للنموذج لكل فاتورة ----------
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-async function askClaude(images, prompt, c, signal) {
+async function askClaude(images, prompt, c, signal, effort = "low") {
   const { default: Anthropic } = await import(ANTHROPIC_SDK);
   // المفتاح من إعدادات هالجهاز، مش من كود الصفحة
   const client = new Anthropic({ apiKey: c.key, baseURL: c.url || undefined, dangerouslyAllowBrowser: true });
@@ -214,7 +220,7 @@ async function askClaude(images, prompt, c, signal) {
   try {
     const msg = await client.beta.messages.create({
       model: c.model, max_tokens: 16000,
-      output_config: { effort: "low" },   // استخراج بسيط: low أسرع
+      output_config: { effort },   // القراءة العادية low (أسرع)، والتدقيق بعد خلاف بين قراءتين high
       ...fb,
       system: SYSTEM,
       messages: [{ role: "user", content: [
@@ -389,13 +395,18 @@ const idb = (() => {
     del: k => tx("readwrite", s => s.delete(k)),
     all: prefix => tx("readonly", s => s.getAll(IDBKeyRange.bound(prefix, prefix + "￿"))) };
 })();
-const saveChat = () => idb.set(MALI.chatKey, { CHAT, UI, ctxSent, at: lastAt }).catch(() => {});
+// بصمة التعليمات والأدوات: لو الإضافة تحدّثت وتغيّروا، المحادثة القديمة ما بتكمّل (الكاش والتفكير المحفوظ مربوطين فيهم)
+let SIG = "";
+const chatSig = () => SIG || (SIG = (() => { const t = MALI.system + JSON.stringify(MALI.tools); let h = 0; for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) | 0; return String(h >>> 0); })());
+let staleChat = false;
+const saveChat = () => idb.set(MALI.chatKey, { CHAT, UI, ctxSent, at: lastAt, sig: chatSig() }).catch(() => {});
 async function loadChat() {
   try {
     const s = await idb.get(MALI.chatKey);
     if (!s || !Array.isArray(s.CHAT)) return;
     CHAT = s.CHAT; ctxSent = !!s.ctxSent;
     lastAt = s.at || (s.CHAT.length ? 1 : 0);   // محادثة محفوظة قبل هالتحديث: الطلب الجاي بيبلّش جديدة
+    staleChat = s.CHAT.length > 0 && s.sig !== chatSig();
     for (const it of s.UI || []) say(it.cls, it.text);
   } catch (e) {}
 }
@@ -578,10 +589,54 @@ chatTab.ondrop = e => { e.preventDefault(); chatTab.classList.remove("over"); at
 const MAX_DRAFT_PAGES = 60;   // ponytail: أوّل 60 صفحة من الـPDF، زيدها إذا في ملفات أطول
 const INLINE_DRAFT = 8000;    // مسودة أصغر من هيك بتنبعت كاملة مع الرسالة، الأكبر أوّل PREVIEW_LINES سطر والباقي بأدوات الخزنة
 const PREVIEW_LINES = 40;
+// قراءة الصور: الأرقام أهمّ إشي. كل صفحة بتنقرا مرّتين بطريقتين مختلفتين (نصّ كامل + قائمة أرقام لحالها)،
+// ولو في رقم بالقائمة مش موجود بالنصّ، قراءة ثالثة بتدقّق بالصورة على الأرقام المختلف عليها بس.
+// أيّ رقم لسّا مش أكيد بينكتب ⟦القراءة؟⟧ أو ⟦قراءة | قراءة؟⟧، والمساعد بيحكي للمحاسب عنه قبل ما يستعمله.
+const DIGIT_RULES = `Numbers matter most: read every number digit by digit. Digits run left to right even inside Arabic text, so never reverse them. Keep separators exactly as printed (٫ or . for decimals, ٬ or , for thousands).
+Digits that are easy to confuse: ٠ and ٥ and a dot; ٢ and ٣; ٤ and ٦ (Persian ۴ and ۶); ٧ and ٨; 1 and 7; 3 and 8; 5 and 6; 0 and 6. Look twice at handwriting, stamps, faint or folded spots.`;
+const DOUBT_RULE = `If you are not completely sure of a number, even slightly, write it as ⟦your reading؟⟧, or ⟦reading A | reading B؟⟧ when two readings are possible. Never silently pick one.`;
 const OCR_PROMPT = `Transcribe this page into plain text exactly as printed, in reading order and in its original language.
 Keep every number, date, name and code exactly as written. Write each table row on one line with | between cells, keeping دينار and فلس columns as printed.
-Mark anything illegible with [؟]. No summary, translation, comments or added text.`;
-const ocr = (img, c, signal) => (c.provider === "anthropic" ? askClaude : askOpenAI)([img], OCR_PROMPT, c, signal);
+${DIGIT_RULES}
+${DOUBT_RULE} Mark anything else illegible with [؟].
+No summary, translation, comments or added text.`;
+const NUMS_PROMPT = `List every number on this page (amounts, quantities, prices, totals, dates, invoice, tax, account and phone numbers) in reading order, one per line, as: short label | the number exactly as written.
+${DIGIT_RULES}
+No other text.`;
+const CHECK_PROMPT = (text, a, b) => `Two independent readings of this page disagree on some numbers.
+The first reading, in full:
+${text}
+
+Numbers that only the first reading has: ${a.join("، ") || "none"}
+Numbers that only the second reading has: ${b.join("، ") || "none"}
+
+Look closely at the page at each of these numbers, digit by digit, and return the full first reading with any wrong number corrected. ${DIGIT_RULES}
+${DOUBT_RULE}
+Keep everything else exactly as it is. No comments.`;
+const toWestern = s => String(s).replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/[۰-۹]/g, d => "۰۱۲۳۴۵۶۷۸۹".indexOf(d));
+const numsIn = t => (String(t).match(/[0-9٠-٩۰-۹]+(?:[.,٫٬][0-9٠-٩۰-۹]+)*/g) || []).map(x => {
+  const s = toWestern(x).replace(/[٬,]/g, "").replace(/٫/g, "."), n = Number(s);
+  return isNaN(n) ? s : String(n);
+});
+function numDiff(a, b) {   // الأرقام اللي بقراءة وحدة ومش بالثانية (مع التكرار)
+  const left = new Map();
+  for (const n of b) left.set(n, (left.get(n) || 0) + 1);
+  const onlyA = [];
+  for (const n of a) { const k = left.get(n) || 0; if (k) left.set(n, k - 1); else onlyA.push(n); }
+  return { a: onlyA, b: [...left].flatMap(([n, k]) => Array(k).fill(n)) };
+}
+const DOUBT_MARK = /⟦[^⟧]*⟧/g;
+async function ocr(img, c, signal) {
+  const ask = (p, effort) => (c.provider === "anthropic" ? askClaude : askOpenAI)([img], p, c, signal, effort);
+  const [text, list] = await Promise.all([ask(OCR_PROMPT), ask(NUMS_PROMPT).catch(e => { if (signal && signal.aborted) throw e; return ""; })]);
+  if (!list.trim()) return text;
+  // الأرقام اللي عليها علامة شكّ بتنحسب مختلف عليها، فبتنعاد تدقيقها كمان
+  const d = numDiff(numsIn(text.replace(DOUBT_MARK, " ")), list.split("\n").map(l => l.split("|").pop()).flatMap(numsIn));
+  if (!d.b.length) return text;   // كل رقم بالقائمة موجود بالنصّ زي ما هو
+  const checked = await ask(CHECK_PROMPT(text, d.a.slice(0, 40), d.b.slice(0, 40)), "high").catch(e => { if (signal && signal.aborted) throw e; return ""; });
+  return checked.trim() || text;
+}
+const doubtsIn = t => String(t).match(DOUBT_MARK) || [];
 const nPages = n => n === 1 ? "صفحة وحدة" : n === 2 ? "صفحتين" : n <= 10 ? `${n} صفحات` : `${n} صفحة`;
 
 async function fileToDraft(file, c, signal) {
@@ -628,17 +683,19 @@ async function draftFor(file, c, signal) {
 
 async function attachmentBlocks(files, c, signal) {
   const res = await Promise.all(files.map(f => draftFor(f, c, signal).catch(e => ({ error: e.message || String(e) }))));
-  const blocks = [], failed = [], news = [], olds = [];
+  const blocks = [], failed = [], news = [], olds = [], doubts = [];
   res.forEach((r, i) => {
     const name = files[i].name || "صورة ملصوقة";
     if (r.error) { failed.push(`${name}: ${r.error}`); return; }
-    const n = r.note, lines = n.text.split("\n");
+    const n = r.note, lines = n.text.split("\n"), marks = doubtsIn(n.text);
     (r.reused ? olds : news).push(title(n.path));
-    const head = `Attached file «${name}» ${r.reused ? "was read before; its draft is" : "is now read and saved as"} ${n.path} (${n.meta}, ${lines.length} lines)`;
+    if (marks.length) doubts.push({ name, marks });
+    const head = `Attached file «${name}» ${r.reused ? "was read before; its draft is" : "is now read and saved as"} ${n.path} (${n.meta}, ${lines.length} lines)` +
+      (marks.length ? `. It has ${marks.length} uncertain number reading${marks.length > 1 ? "s" : ""} marked ⟦…؟⟧ (search the draft for ⟦ to find them all): before you use any of them, tell the accountant each one, where it is and the possible readings, and ask them to confirm` : "");
     blocks.push({ type: "text", text: n.text.length <= INLINE_DRAFT ? `${head}:\n${n.text}`
       : `${head}. First ${PREVIEW_LINES} lines; read the rest with vault_search / vault_read:\n${lines.slice(0, PREVIEW_LINES).join("\n").slice(0, INLINE_DRAFT)}` });
   });
-  return { blocks, failed, news, olds };
+  return { blocks, failed, news, olds, doubts };
 }
 
 async function chatSend() {
@@ -650,8 +707,9 @@ async function chatSend() {
   if (c.provider !== "anthropic" || !c.key) { $("settings").open = true; say("err", "مساعد إكسل بيشتغل مع Claude: اختار Anthropic من الإعدادات وحط المفتاح."); return; }
   if (overBudget()) { say("err", overBudget()); return; }
   // رجع بعد ساعة أو أكثر وطلب إشي جديد (مش «كمّل»): محادثة جديدة لحالها، والقديمة بتنحفظ بالخزنة
-  if (CHAT.length && lastAt && Date.now() - lastAt > NEW_CHAT_AFTER && CHAT[CHAT.length - 1].role === "assistant" && !KEEP_GOING.test(text)) {
-    const old = await archiveChat().catch(() => null), why = lastAt > 1 ? `لأنّ آخر رسالة كانت قبل ${ago((Date.now() - lastAt) / 60e3)}` : "لأنّ المحادثة القديمة طويلة";
+  if (CHAT.length && (staleChat || lastAt && Date.now() - lastAt > NEW_CHAT_AFTER && CHAT[CHAT.length - 1].role === "assistant" && !KEEP_GOING.test(text))) {
+    const old = await archiveChat().catch(() => null);
+    const why = staleChat ? "لأنّ الإضافة تحدّثت" : lastAt > 1 ? `لأنّ آخر رسالة كانت قبل ${ago((Date.now() - lastAt) / 60e3)}` : "لأنّ المحادثة القديمة طويلة";
     clearChat(); prevChat = old ? old.path : "";
     say("step", `🆕 بلّشت محادثة جديدة لحالها ${why}، عشان الطلب يضلّ رخيص.` + (old ? ` القديمة انحفظت بالخزنة «${title(old.path)}» وبرجعلها إذا احتجتها.` : ""));
   }
@@ -672,6 +730,9 @@ async function chatSend() {
     if (a.news.length) say("step", "📄 انقرت وانحفظت بالخزنة: " + a.news.join("، "));
     if (a.olds.length) say("step", "📄 مقروءة من قبل، من الخزنة بدون قراءة جديدة: " + a.olds.join("، "));
     if (a.failed.length) say("err", "ما قدرت أقرأ:\n" + a.failed.join("\n"));
+    // كل رقم عليه شكّ بينعرض هون فوراً، قبل ما النموذج يحكي إشي
+    for (const d of a.doubts) say("err", `⚠️ «${d.name}»: ${d.marks.length === 1 ? "رقم واحد مش متأكّد منه، تأكّد منه" : (d.marks.length === 2 ? "رقمين" : d.marks.length + " أرقام") + " مش متأكّد منهم، تأكّد منهم"} من الأصل:\n` +
+      d.marks.slice(0, 8).map(m => "• " + m).join("\n") + (d.marks.length > 8 ? `\n…و${d.marks.length - 8} كمان` : ""));
   }
   // إذا الدور اللي قبل وقف (خطأ أو «وقّف») بعد نتائج أدوات ما انبعتت، الكلام الجديد بينضمّ لنفس رسالة المستخدم
   const note = [...ctx, ...blocks, { type: "text", text: text + await MALI.contextNote() }];
@@ -768,7 +829,7 @@ const NEW_CHAT_AFTER = 60 * 60e3;   // ponytail: بعد ساعة بدون رسا
 const KEEP_GOING = /^\s*(كم+ّ?ل|كمان|تابع|و?بعدين|continue)/i;   // «كمّل» بعد الاستراحة بتكمّل نفس المحادثة
 const ago = m => { m = Math.round(m); const h = Math.round(m / 60), d = Math.round(m / 1440);
   return m < 120 ? `${m} دقيقة` : h < 24 ? (h === 2 ? "ساعتين" : `${h} ساعات`) : d === 1 ? "يوم" : d === 2 ? "يومين" : d <= 10 ? `${d} أيام` : `${d} يوم`; };
-function clearChat() { CHAT = []; UI = []; ctxSent = false; $("chat").innerHTML = ""; $("cstatus").textContent = ""; $("empty").hidden = false; }
+function clearChat() { CHAT = []; UI = []; ctxSent = false; staleChat = false; $("chat").innerHTML = ""; $("cstatus").textContent = ""; $("empty").hidden = false; }
 async function archiveChat() {
   const items = UI.filter(it => ["me", "ai", "step", "err"].includes(it.cls) && String(it.text || "").trim());
   const asks = items.filter(it => it.cls === "me");

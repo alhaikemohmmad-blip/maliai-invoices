@@ -109,7 +109,7 @@
   <small>المفتاح بينحفظ على جهازك بس، مش بكود الصفحة. الكتابة بالصوت مجّانية وما بدها مفتاح.</small>
   <button id="save" type="button">احفظ</button>
 </details>
-<script src="core.js?v=20261104c"></script>
+<script src="core.js?v=20261105"></script>
 <script>
 // الأعمدة الجديدة بتنضاف بالآخر عشان الصفوف القديمة بالشيت تضلّ تحت عناوينها
 const INV_HEAD  = ["الملف", "المورّد", "الرقم الضريبي", "رقم الفاتورة", "التاريخ", "العملة", "قبل الضريبة", "الضريبة", "الإجمالي", "ملاحظات المحاسب", "الحساب", "نسبة الضريبة %"];
@@ -123,13 +123,16 @@ const PROMPT = `Book this one invoice (Arabic or English), given as page images 
 Return ONLY one JSON object, no prose, exactly this shape:
 {"vendor":"","vendor_tax_no":"","invoice_no":"","date":"YYYY-MM-DD","currency":"",
  "items":[{"description":"","qty":0,"unit_price":0,"total":0}],
- "subtotal":0,"tax":0,"total":0,"account":"","notes":""}
+ "subtotal":0,"tax":0,"total":0,"account":"","notes":"",
+ "doubts":[{"field":"","read":"","other":""}]}
 Rules: numbers as plain JSON numbers with Western digits (convert ٠-٩), no thousands separators.
 Use null for anything not on the invoice. Never guess. Keep descriptions in the invoice's language.
 currency as ISO code (JOD, USD, ...). One entry in items per line on the invoice.
 Arabic invoices, including handwritten ones: read Arabic-Indic (٠١٢٣٤٥٦٧٨٩) and Persian (۰۱۲۳۴۵۶۷۸۹) digits; ٫ is the decimal separator and ٬ separates thousands.
 Jordanian paper invoices often split each amount into دينار and فلس columns: combine them as dinars + fils/1000 (12 | 500 → 12.5).
-Before answering, re-add the lines yourself and compare with the printed totals; if a handwritten digit is ambiguous, choose the reading that makes the line and the totals agree, and mention it in notes.
+${DIGIT_RULES}
+Before answering, re-add the lines yourself and compare with the printed totals.
+doubts: every value you are not completely sure of, even slightly (a digit, a decimal point, a دينار/فلس split, an invoice or tax number, a date): field = which value in Arabic (e.g. "الإجمالي" or "البند 3 سعر الوحدة"), read = the reading you put in the JSON, other = the other possible reading or "". Never silently pick a reading; you may use the totals to choose, but still list it. [] if you are sure of everything.
 account: the single best booking account for this invoice, exactly one of: ${ACCOUNTS.join(" | ")}.
 notes: short Arabic remarks, only for what an accountant must check before booking (missing seller tax number, unusual tax rate,
 illegible or handwritten amounts, not a tax invoice, totals that don't add up, date in the future); "" if nothing.`;
@@ -157,10 +160,10 @@ drop.ondragleave = () => drop.classList.remove("over");
 drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); addFiles(e.dataTransfer.files); };
 $("clear").onclick = () => { queue.length = 0; $("list").innerHTML = ""; addFiles([]); setStatus(""); };
 
-async function extract({ images = [], text = "" }, c, extra = "", signal) {
+async function extract({ images = [], text = "" }, c, extra = "", signal, effort = "low") {
   if (!images.length && !text.trim()) throw new Error("ما لقيت إشي أقرأه بالملف");
   const prompt = (text ? PROMPT + "\n\nInvoice content:\n" + text.slice(0, MAX_TEXT) : PROMPT) + extra;
-  const content = c.provider === "anthropic" ? await askClaude(images, prompt, c, signal) : await askOpenAI(images, prompt, c, signal);
+  const content = c.provider === "anthropic" ? await askClaude(images, prompt, c, signal, effort) : await askOpenAI(images, prompt, c, signal);
   const m = String(content).match(/\{[\s\S]*\}/);
   if (!m) throw new Error("النموذج ما رجّع بيانات مفهومة");
   return JSON.parse(m[0]);
@@ -188,6 +191,24 @@ function mathIssues(inv) {
   if (bad) out.push(`${bad} سطر: الكمية × السعر ≠ القيمة`);
   return out;
 }
+// قراءتين مستقلّتين لكل فاتورة مصوّرة: لو اختلفوا بأيّ رقم، قراءة ثالثة بتدقّق بهالأرقام بس
+const SECOND_LOOK = `\n\nRead the amounts from the bottom of the invoice upward (total, tax, subtotal, then each line from the last to the first), digit by digit, before filling the JSON.`;
+const sameVal = (x, y) => { const a = num(x), b = num(y); return a !== "" || b !== "" ? a === b : toWestern(txt(x)).replace(/\s/g, "") === toWestern(txt(y)).replace(/\s/g, ""); };
+function invDiff(a, b) {
+  const out = [], label = { vendor_tax_no: "الرقم الضريبي", invoice_no: "رقم الفاتورة", date: "التاريخ", subtotal: "قبل الضريبة", tax: "الضريبة", total: "الإجمالي" };
+  for (const k of Object.keys(label)) if (!sameVal(a[k], b[k])) out.push(`${label[k]}: ${txt(a[k])} / ${txt(b[k])}`);
+  const ia = Array.isArray(a.items) ? a.items : [], ib = Array.isArray(b.items) ? b.items : [];
+  if (ia.length !== ib.length) out.push(`عدد البنود: ${ia.length} / ${ib.length}`);
+  else ia.forEach((x, i) => { for (const [k, l] of [["qty", "الكمية"], ["unit_price", "سعر الوحدة"], ["total", "القيمة"]])
+    if (!sameVal(x[k], ib[i][k])) out.push(`البند ${i + 1} ${l}: ${txt(x[k])} / ${txt(ib[i][k])}`); });
+  return out;
+}
+const RECONCILE = (a, b, diffs) => `\n\nTwo independent readings of this invoice disagree on: ${diffs.join("; ")}.
+First reading: ${JSON.stringify(a)}
+Second reading: ${JSON.stringify(b)}
+Look at the invoice again at exactly these values, digit by digit, and return the final JSON in the same shape.
+For any value you are still not completely sure of, put your best reading in the field and list it in doubts with the other reading.`;
+const doubtList = inv => (Array.isArray(inv.doubts) ? inv.doubts : []).filter(d => d && txt(d.read || d.field).trim());
 const RECHECK = (prev, problems) => `\n\nYour first reading of this invoice was:\n${JSON.stringify(prev)}\nThese checks failed: ${problems.join("; ")}.
 Look at the invoice again digit by digit (quantities, unit prices, line totals, subtotal, tax, total, and any دينار/فلس columns) and return the corrected JSON in the same shape. Keep values that were right. If the printed invoice itself doesn't add up, keep the printed numbers and say so in notes.`;
 
@@ -199,7 +220,9 @@ function toRows(name, inv, extraNotes = []) {
   if (rate !== "" && rate !== 0 && Math.abs(rate - 16) > 0.1) notes.push(`نسبة الضريبة ${rate}% مش 16% — تأكّد منها`);
   if (!txt(inv.vendor_tax_no).trim() && tax) notes.push("في ضريبة بس ما في رقم ضريبي للمورّد");
   if (txt(inv.notes).trim()) notes.push(txt(inv.notes).trim());
-  return {
+  const doubts = doubtList(inv);
+  if (doubts.length) notes.unshift("⚠️ مش متأكّد من: " + doubts.map(d => `${txt(d.field)} ${txt(d.read)}${txt(d.other).trim() ? " أو " + txt(d.other) : ""}`).join("، ") + " — تأكّد من الأصل");
+  return { doubt: doubts.length > 0,
     inv: [name, txt(inv.vendor), txt(inv.vendor_tax_no), txt(inv.invoice_no), txt(inv.date), txt(inv.currency), sub, tax, tot, notes.join(" · "), txt(inv.account), rate],
     items: items.map(i => [name, txt(inv.invoice_no), txt(i.description), num(i.qty), num(i.unit_price), num(i.total), lineBad(i) ? "الكمية × السعر ≠ القيمة" : ""])
   };
@@ -207,7 +230,7 @@ function toRows(name, inv, extraNotes = []) {
 
 // ---------- كتابة كل شي بإكسل دفعة وحدة ----------
 function colName(n) { let s = ""; for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; }
-async function writeToExcel(invRows, itemRows) {
+async function writeToExcel(invRows, itemRows, doubtful = []) {
   await Excel.run(async ctx => {
     const sheets = [["الفواتير", INV_HEAD, invRows], ["البنود", ITEM_HEAD, itemRows]]
       .map(([name, head, rows]) => ({ name, head, rows, ws: ctx.workbook.worksheets.getItemOrNullObject(name) }));
@@ -226,6 +249,8 @@ async function writeToExcel(invRows, itemRows) {
       header.format.font.bold = true;
       if (s.rows.length) s.ws.getRange(`A${start + 1}:${last}${start + s.rows.length}`).values = s.rows;
       s.ws.getRange(`A1:${last}${start + s.rows.length}`).format.autofitColumns();
+      // فاتورة فيها رقم مش أكيد: خلية الملاحظات بالأصفر عشان تنشاف
+      if (s === sheets[0]) doubtful.forEach((d, k) => { if (d) s.ws.getRange(`J${start + 1 + k}`).format.fill.color = "#FFF2CC"; });
     }
     sheets[0].ws.activate();
     await ctx.sync();
@@ -278,7 +303,18 @@ async function run() {
           st.textContent = "بقرأ الملف…";
           const parts = await toParts(file);
           st.textContent = "بفرّغ…";
-          inv = await extract(parts, c, "", signal);
+          const scanned = parts.images && parts.images.length;   // الملفات النصّيّة (XML/CSV) أرقامها مضبوطة، بدها قراءة وحدة
+          const [first, second] = await Promise.all([extract(parts, c, "", signal),
+            scanned ? extract(parts, c, SECOND_LOOK, signal).catch(e => { if (signal.aborted) throw e; return null; }) : null]);
+          inv = first;
+          const diffs = second ? invDiff(first, second) : [];
+          if (diffs.length) {   // القراءتين اختلفوا: قراءة ثالثة على هالأرقام بس
+            st.textContent = "القراءتين اختلفوا برقم، بدقّق فيه…";
+            const fixed = await extract(parts, c, RECONCILE(first, second, diffs), signal, "high").catch(e => { if (signal.aborted) throw e; return null; });
+            if (fixed) inv = fixed;
+            else inv = { ...first, doubts: [...doubtList(first), ...diffs.map(d => ({ field: d.split(":")[0], read: d.split(":").slice(1).join(":").trim(), other: "" }))] };
+            notes.push("القراءتين الأولى والثانية اختلفوا بـ: " + diffs.join("، ") + (fixed ? " — انحسمت بقراءة ثالثة" : ""));
+          }
           const problems = mathIssues(inv);
           if (problems.length) {   // الأرقام ما زبطت: قراءة ثانية مركّزة قبل ما نطلّعها
             st.textContent = "الأرقام ما زبطت، بدقّق مرّة ثانية…";
@@ -300,7 +336,9 @@ async function run() {
           if (hash) saveCache(hash, name, inv);
         }
         results[i] = toRows(name, inv, notes);
-        st.textContent = `✓ ${txt(inv.vendor) || "؟"} · ${txt(inv.total)} ${txt(inv.currency)} · ${hit ? "من الكاش" : ((performance.now() - t) / 1000).toFixed(1) + " ث"}`;
+        const nd = doubtList(inv).length;
+        st.textContent = `✓ ${txt(inv.vendor) || "؟"} · ${txt(inv.total)} ${txt(inv.currency)} · ${hit ? "من الكاش" : ((performance.now() - t) / 1000).toFixed(1) + " ث"}` +
+          (nd ? ` · ⚠️ ${nd === 1 ? "رقم واحد" : nd === 2 ? "رقمين" : nd + " أرقام"} مش أكيد` : "");
       } catch (e) {
         li.className = "err";
         st.textContent = "✗ " + (signal.aborted ? "اتوقّف" : (e.message || e));
@@ -314,9 +352,11 @@ async function run() {
   if (!done.length) { setStatus(signal.aborted ? "وقّفت قبل ما تخلص ولا فاتورة." : "ما انفرّغت ولا فاتورة."); $("go").disabled = false; return; }
   if (!inHost) { setStatus(`انفرّغت ${done.length} بـ ${secs} ث — بس الصفحة مش داخل إكسل، فما انكتبت.`); $("go").disabled = false; return; }
   try {
-    await writeToExcel(done.map(r => r.inv), done.flatMap(r => r.items));
+    await writeToExcel(done.map(r => r.inv), done.flatMap(r => r.items), done.map(r => r.doubt));
+    const nDoubt = done.filter(r => r.doubt).length;
     setStatus(`✓ انكتبت ${done.length} فاتورة بـ ${((performance.now() - t0) / 1000).toFixed(1)} ث (شيت «الفواتير» و«البنود»)` +
-      (fromCache ? ` · ${fromCache} من الكاش` : "") + (signal.aborted ? " · وقّفت قبل الباقي" : "") + ".");
+      (fromCache ? ` · ${fromCache} من الكاش` : "") + (signal.aborted ? " · وقّفت قبل الباقي" : "") + "." +
+      (nDoubt ? ` ⚠️ ${nDoubt === 1 ? "فاتورة وحدة فيها" : nDoubt + " فواتير فيها"} أرقام مش أكيدة: ملاحظاتها بالأصفر بعمود «ملاحظات المحاسب»، راجعها من الأصل.` : ""));
     // اللي انكتبت بتطلع من القائمة، والفاشلة بتضل لإعادة المحاولة
     for (let i = jobs.length - 1; i >= 0; i--) if (results[i]) { jobs[i].li.remove(); queue.splice(queue.indexOf(jobs[i]), 1); }
   } catch (e) {
@@ -337,10 +377,11 @@ How you work:
 - Look before you change anything: use workbook_overview and read_range first. Never assume a layout or a column.
 - Prefer live formulas over typed results so the workbook stays right when data changes. Write formulas with English function names and comma separators. Quote sheet names in references, e.g. ='الفواتير'!I2.
 - Check every number you produce. write_range returns the computed values and any error cells: fix every #REF!, #VALUE!, #DIV/0!, #NAME?, #N/A, #SPILL!. Then cross-check totals a second, independent way (for example, the grand total of a summary equals the SUM of the source column) and tell the accountant what you checked and whether it matched.
+- Numbers read from pictures and scans can be misread, Arabic digits and handwriting most of all. Any reading marked ⟦…؟⟧ in a draft, and any number you have even a slight doubt about, tell the accountant plainly before you use it: which number, where it is, and the possible readings. Never pick one silently.
 - Never delete, clear or overwrite existing data without the accountant's explicit yes in this conversation; only then pass overwrite or confirmed.
 - Deleting by condition (empty rows, duplicates, a value, numbers above or below a limit): use delete_rows_where. Call it first without confirmed: it deletes nothing and returns how many rows match with examples. Show the accountant the count and a few examples, and only after their yes call it again with confirmed: true. Do the same with delete_objects for charts, shapes, pivot tables, tables and named ranges.
 - Removing colors and formatting: use clear_formatting on exactly the range asked (fills, font colors, bold and italic, borders, conditional formatting, drop-down validation, number formats, checkboxes). It never touches the values.
-- Objects over the sheet: add_shape places shapes, lines, arrows and text boxes, positioned by cells so they line up with the data. add_checkboxes puts real tick boxes in cells (TRUE when ticked) or ✓/✗ marks colored green and red. workbook_overview lists the charts, shapes and pivot tables already on each sheet.
+- Objects over the sheet: add_shape places shapes, lines, arrows and text boxes, positioned by cells so they line up with the data. add_checkboxes puts real tick boxes in cells (TRUE when ticked) or ✓/✗ marks colored green and red. add_code puts QR codes and barcodes in cells, one or one per row; check the digit count for EAN and UPC first, and use qr for Arabic text or links. workbook_overview lists the charts, shapes and pivot tables already on each sheet.
 - Printing: when the accountant wants a sheet printed or ready to print, make it print-ready completely. First the table itself: a bold header row with a light fill, thin borders around the table, number formats with thousands separators and the right decimals, wrap long text, sensible column widths (autofit, then widen anything that shows ####), the totals row bold with a top border, and no stray content outside the report. Then page_setup (auto: true is a good start; add a header with the company or report name when you know it). Read the estimate it returns: if the scale is below about 70% or a lot of pages print for little data, fix it (landscape, narrow margins, a tighter print area, fewer or narrower columns) and set up again. Tell the accountant how many pages it will print on, then that Ctrl+P shows the preview and prints; the add-in can't press Print itself.
 - Sheet tabs: manage_sheets renames, opens (activate), reorders, colors, hides, shows and copies sheets; when the accountant asks to go to a sheet or see one, activate it. move_range moves a table or block of cells like cut and paste, on the same sheet or to another one.
 - The accountant may dictate by voice, so a message can be a speech transcription: read names and numbers with that in mind, and ask when a number looks misheard.
@@ -358,6 +399,7 @@ How you work:
 - When you finish, say in one to three lines what you built, where (sheet and range), and what you verified.`;
 
 const MAX_CELLS = 4000;   // حدّ القراءة بالنداء الواحد
+const MAX_CODES = 300;    // ponytail: أكثر عدد QR/باركود بالنداء الواحد
 const EXCEL_TOOLS = [
   { name: "workbook_overview", description: "List every sheet with its used range and header row, all tables, the active sheet and the current selection. Call it first when you don't know the workbook yet.",
     input_schema: { type: "object", properties: {} } },
@@ -466,7 +508,15 @@ const EXCEL_TOOLS = [
       gridlines: { type: "boolean", description: "Print the grey cell gridlines" }, headings: { type: "boolean", description: "Print row numbers and column letters" },
       black_and_white: { type: "boolean" }, first_page_number: { type: "integer" },
       page_breaks: { type: "object", description: "rows: start a new page at these row numbers; columns: at these column letters; clear: remove manual breaks first",
-        properties: { rows: { type: "array", items: { type: "integer" } }, columns: { type: "array", items: { type: "string" } }, clear: { type: "boolean" } } } } } }
+        properties: { rows: { type: "array", items: { type: "integer" } }, columns: { type: "array", items: { type: "string" } }, clear: { type: "boolean" } } } } } },
+  { name: "add_code", description: `Put QR codes or barcodes on the sheet as pictures, each one centred in its cell (the row and column grow when needed). One code: text + cell. One per row: source = a one-column range of texts (e.g. A2:A200; empty cells are skipped) and to_column = the column the codes go in, on the same rows. Types: qr (any text, Arabic and links included), code128 (Latin letters, digits and symbols), ean13 (12 digits, or 13 with a valid check digit), ean8 (7 or 8 digits), upc (11 or 12 digits), code39 (capital letters, digits, - . $ / + % space), itf14 (13 or 14 digits). At most ${MAX_CODES} codes per call. Needs ExcelApi 1.9.`,
+    input_schema: { type: "object", properties: {
+      sheet: { type: "string" }, type: { type: "string", enum: ["qr", "code128", "ean13", "ean8", "upc", "code39", "itf14"] },
+      text: { type: "string", description: "One code: what it encodes" }, cell: { type: "string", description: "One code: the cell it goes in, e.g. D2" },
+      source: { type: "string", description: "One per row: the cells holding the texts, e.g. A2:A200" },
+      to_column: { type: "string", description: "One per row: the column letter the codes go in, e.g. D" },
+      size_cm: { type: "number", description: "QR side or barcode height in cm (default 2.5 for QR, 1.5 for barcodes)" },
+      show_text: { type: "boolean", description: "Barcodes: print the code under the bars (default true)" } }, required: ["type"] } }
 ];
 
 const ws = (ctx, name) => name ? ctx.workbook.worksheets.getItem(name) : ctx.workbook.worksheets.getActiveWorksheet();
@@ -489,6 +539,7 @@ const EXCEL_LABELS = {
   delete_objects: a => `${a.confirmed ? "بحذف" : "بعدّ"} ${({ charts: "الرسومات", shapes: "الأشكال", pivots: "جداول Pivot", tables: "الجداول", names: "الأسماء" })[a.kind] || a.kind}`,
   add_shape: a => `برسم ${({ line: "خطّ", arrow: "سهم", textbox: "مربّع نصّ" })[String(a.type).toLowerCase()] || "شكل"} عند ${a.from_cell}${a.to_cell ? "←" + a.to_cell : ""}`,
   add_checkboxes: a => `بحطّ ${a.style === "tick_cross" ? "✓/✗" : "مربّعات صح"} بـ ${a.address}`,
+  add_code: a => `بعمل ${String(a.type).toLowerCase() === "qr" ? "QR" : "باركود"} ${a.source ? "لكل صفّ من " + a.source + " بعمود " + (a.to_column || "؟") : "بـ " + (a.cell || "؟")}`,
   manage_sheets: a => (Array.isArray(a.actions) ? a.actions : []).map(x => ({ rename: `بغيّر اسم «${x.sheet}» لـ«${x.new_name}»`, activate: `بفتح «${x.sheet}»`,
     move: `بنقل «${x.sheet}»${x.before ? " قبل «" + x.before + "»" : x.after ? " بعد «" + x.after + "»" : ""}`, tab_color: `بلوّن «${x.sheet}»`, hide: `بخبّي «${x.sheet}»`,
     show: `بظهّر «${x.sheet}»`, copy: `بنسخ «${x.sheet}»` })[x.action] || x.action).join("، ") || "بالشيتات",
@@ -560,6 +611,31 @@ async function printReport(ctx, s) {
     header: { left: hf.leftHeader, center: hf.centerHeader, right: hf.rightHeader }, footer: { left: hf.leftFooter, center: hf.centerFooter, right: hf.rightFooter },
     gridlines: pl.printGridlines, headings: pl.printHeadings, black_and_white: pl.blackAndWhite, first_page_number: pl.firstPageNumber,
     manual_page_breaks: { rows: hb.items.map(b => b.rowIndex + 1), columns: vb.items.map(b => colName(b.columnIndex + 1)) }, estimate: est };
+}
+
+// رسمة QR أو باركود ← PNG (base64 بدون data:) مع أبعادها
+const BARCODE_FORMAT = { code128: "CODE128", ean13: "EAN13", ean8: "EAN8", upc: "UPC", code39: "CODE39", itf14: "ITF14" };
+function codePng(type, text, showText) {
+  const cv = document.createElement("canvas"), g = cv.getContext("2d");
+  if (type === "qr") {
+    qrcode.stringToBytes = qrcode.stringToBytesFuncs["UTF-8"];   // العربي بينقرا صح بكاميرا التلفون
+    const q = qrcode(0, "M");
+    q.addData(text, "Byte"); q.make();
+    const n = q.getModuleCount(), m = 10, quiet = 4;
+    cv.width = cv.height = (n + quiet * 2) * m;
+    g.fillStyle = "#fff"; g.fillRect(0, 0, cv.width, cv.height); g.fillStyle = "#000";
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.isDark(r, c)) g.fillRect((c + quiet) * m, (r + quiet) * m, m, m);
+  } else {
+    const format = BARCODE_FORMAT[type];
+    if (!format) throw new Error(`unknown type ${type}`);
+    let ok = true;
+    JsBarcode(cv, text, { format, displayValue: showText, width: 3, height: 120, margin: 12, fontSize: 30, background: "#ffffff", lineColor: "#000000", valid: v => { ok = v; } });
+    const full = { EAN13: 13, EAN8: 8, UPC: 12, ITF14: 14 }[format];
+    if (!ok || !cv.width) throw new Error(`"${text}" can't be encoded as ${format}` + (/[^\x20-\x7E]/.test(text) ? " (only Latin letters and digits; use qr for Arabic)"
+      : full && /^\d+$/.test(text) && text.length === full ? ` (the last digit is not a valid check digit; give the first ${full - 1} digits and it is added)`
+      : full ? ` (needs ${full - 1} or ${full} digits)` : ""));
+  }
+  return { data: cv.toDataURL("image/png").split(",")[1], w: cv.width, h: cv.height };
 }
 
 const EXCEL_HANDLERS = {
@@ -933,6 +1009,48 @@ const EXCEL_HANDLERS = {
     if (a.name) sh.name = a.name;
     sh.load("name"); await ctx.sync();
     return { shape: sh.name };
+  }),
+
+  // QR وباركود كصور فوق الخلايا: بتنرسم هون على canvas (بدون نت غير تحميل المكتبة مرّة وحدة) وبتنحطّ بإكسل
+  add_code: (a) => Excel.run(async ctx => {
+    if (!apiOK("1.9")) throw new Error("this Excel version can't add pictures (needs ExcelApi 1.9)");
+    const s = ws(ctx, a.sheet), type = String(a.type || "qr").toLowerCase();
+    let jobs = [];
+    if (a.source) {
+      if (!a.to_column || !/^[A-Za-z]{1,3}$/.test(a.to_column)) throw new Error("to_column must be a column letter, e.g. D");
+      const src = s.getRange(a.source); src.load("values,rowIndex,columnCount"); await ctx.sync();
+      if (src.columnCount !== 1) throw new Error("source must be one column, e.g. A2:A200");
+      src.values.forEach((row, i) => { const t = String(row[0] ?? "").trim(); if (t) jobs.push({ text: t, cell: a.to_column.toUpperCase() + (src.rowIndex + i + 1) }); });
+    } else if (a.text != null && String(a.text).trim() && a.cell) jobs = [{ text: String(a.text).trim(), cell: a.cell }];
+    else throw new Error("give text + cell, or source + to_column");
+    if (!jobs.length) throw new Error(`no text to encode in ${a.source}`);
+    if (jobs.length > MAX_CODES) throw new Error(`${jobs.length} codes; at most ${MAX_CODES} per call, split the range`);
+    await lib(type === "qr" ? "qr" : "barcode");
+    const failed = [];
+    jobs = jobs.filter(j => { try { j.png = codePng(type, j.text, a.show_text !== false); return true; } catch (e) { failed.push(`${j.cell}: ${e.message}`); return false; } });
+    if (!jobs.length) throw new Error("nothing could be encoded: " + failed.slice(0, 5).join("; "));
+    const h = (a.size_cm > 0 ? a.size_cm : type === "qr" ? 2.5 : 1.5) * CM, w = j => h * j.png.w / j.png.h, pad = 6;
+    // أوّل إشي الصفوف والأعمدة بتكبر (لو لازم)، وبعدين منقرأ مكان كل خلية، عشان الصفّ اللي كبر ما يزيح اللي تحته
+    for (let k = 0; k < jobs.length; k += 200) {
+      const part = jobs.slice(k, k + 200), rs = part.map(j => { const r = s.getRange(j.cell); r.load("width,height"); return r; });
+      await ctx.sync();
+      part.forEach((j, i) => { if (rs[i].height < h + pad) rs[i].format.rowHeight = h + pad; if (rs[i].width < w(j) + pad) rs[i].format.columnWidth = w(j) + pad; });
+      await ctx.sync();
+    }
+    const made = [];
+    for (let k = 0; k < jobs.length; k += 20) {   // ٢٠ صورة بكل مرّة: إكسل أونلاين بيرفض الطلب الأكبر من ٥ ميغا
+      const part = jobs.slice(k, k + 20), rs = part.map(j => { const r = s.getRange(j.cell); r.load("left,top,width,height,address"); return r; });
+      await ctx.sync();
+      part.forEach((j, i) => {
+        const r = rs[i], sh = s.shapes.addImage(j.png.data);
+        sh.lockAspectRatio = true; sh.height = h; sh.width = w(j);
+        sh.left = r.left + Math.max(0, (r.width - w(j)) / 2); sh.top = r.top + Math.max(0, (r.height - h) / 2);
+        sh.name = (type === "qr" ? "QR " : "Barcode ") + r.address.split("!").pop();
+        made.push(r.address.split("!").pop());
+      });
+      await ctx.sync();
+    }
+    return { added: made.length, type, cells: made.length > 12 ? `${made[0]} … ${made[made.length - 1]}` : made, ...(failed.length ? { failed: failed.slice(0, 30) } : {}) };
   }),
 
   add_checkboxes: ({ sheet, address, style = "checkbox", checked = false, overwrite }) => Excel.run(async ctx => {
