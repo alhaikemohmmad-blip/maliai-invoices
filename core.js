@@ -749,6 +749,7 @@ async function chatSend() {
       if (stopAsked) { say("step", "وقّفت بطلبك."); break; }
       if (step > MAX_STEPS) { say("err", `وصلت ${MAX_STEPS} خطوة ولسّا ما خلّصت — قلّي «كمّل» إذا بدّك أكمّل.`); break; }
       $("cstatus").textContent = "بفكّر";
+      if (repairChat()) { say("step", "🔧 طلب قبل انقطع وهو بنفّذ (سكّرت الإضافة أو صار خطأ)، فسكّرته بالمحادثة وكمّلت."); saveChat(); }
       const msg = await client.beta.messages.create(chatParams(c, CHAT), { signal: chatAbort.signal });
       const u = msg.usage || {};
       console.info("MaliAI usage", u);   // للتأكّد من الكاش: cache_read_input_tokens لازم يكبر نداء ورا نداء
@@ -767,10 +768,20 @@ async function chatSend() {
       saveChat();
       if (msg.stop_reason === "refusal") { say("err", "Claude رفض هالطلب."); break; }
       if (msg.stop_reason === "pause_turn") continue;
+      if (msg.stop_reason === "max_tokens") {   // الردّ انقطع عند حدّ الطول: أداة نصّها ناقص ما بتنفّذ، وبيعيدها بأجزاء أصغر
+        const cut = msg.content.filter(b => b.type === "tool_use");
+        if (!cut.length) { say("step", "✂️ الردّ طلع طويل وانقطع. اكتبلي «كمّل» وبكمّل من وين وقفت."); break; }
+        CHAT.push({ role: "user", content: cut.map(b => ({ type: "tool_result", tool_use_id: b.id, is_error: true,
+          content: "Your reply hit the output length limit before this tool call was complete, so it did not run. Do the same work in smaller parts, for example at most 150 rows per write_range call." })) });
+        saveChat();
+        say("step", "✂️ الكتابة طلعت أطول من الحدّ بالمرّة الوحدة، فبكمّلها بأجزاء أصغر…");
+        continue;
+      }
       if (msg.stop_reason !== "tool_use") break;
       const results = [];
       for (const b of msg.content.filter(b => b.type === "tool_use")) {
-        const label = MALI.labels[b.name] ? MALI.labels[b.name](b.input || {}) : b.name;
+        let label = b.name;
+        try { if (MALI.labels[b.name]) label = MALI.labels[b.name](b.input || {}); } catch (e) {}   // تسمية ناقصة ما بتوقّف الدور بالنصّ
         // كل tool_use لازم يرجعله نتيجة، حتى لو وقّفنا، عشان السجلّ يضلّ سليم
         if (stopAsked) { results.push({ type: "tool_result", tool_use_id: b.id, content: "Stopped by the accountant before this ran.", is_error: true }); continue; }
         const line = say("step", "• " + label + "…");
@@ -796,6 +807,8 @@ async function chatSend() {
     else if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) m = "المفتاح مرفوض — صلّحه من الإعدادات";
     else if (e instanceof Anthropic.NotFoundError) m = "اسم النموذج غلط — صلّحه من الإعدادات";
     else if (e instanceof Anthropic.RateLimitError) m = "وصلت حدّ Anthropic، استنّى دقيقة وجرّب";
+    else if (e instanceof Anthropic.BadRequestError && !creditOut(e)) m = "Anthropic رفض الطلب. جرّب كمان مرّة، وإذا رجع نفس الخطأ اكبس «محادثة جديدة» (القديمة بتنحفظ بالخزنة).\n" +
+      "(" + String((e.error && e.error.error && e.error.error.message) || e.message).slice(0, 160) + ")";
     else if (creditOut(e)) m = NO_CREDIT;
     if (m) say("err", m); else say("step", "وقّفت بطلبك.");
   }
@@ -829,6 +842,38 @@ const NEW_CHAT_AFTER = 60 * 60e3;   // ponytail: بعد ساعة بدون رسا
 const KEEP_GOING = /^\s*(كم+ّ?ل|كمان|تابع|و?بعدين|continue)/i;   // «كمّل» بعد الاستراحة بتكمّل نفس المحادثة
 const ago = m => { m = Math.round(m); const h = Math.round(m / 60), d = Math.round(m / 1440);
   return m < 120 ? `${m} دقيقة` : h < 24 ? (h === 2 ? "ساعتين" : `${h} ساعات`) : d === 1 ? "يوم" : d === 2 ? "يومين" : d <= 10 ? `${d} أيام` : `${d} يوم`; };
+// كل tool_use لازم تلحقه نتيجته أوّل إشي بالرسالة اللي بعده، وإلّا Anthropic بيرفض المحادثة كلها (400) بكل طلب بعدها.
+// لو دور انقطع وهو بنفّذ (سكّرت الإضافة، خطأ، ردّ مقطوع)، منسكّر الناقص كخطأ. اللي بيتعدّل بس الأماكن المكسورة،
+// وهاي Anthropic ما قبلها أصلاً، فالكاش والتفكير المحفوظ ما بيتأثّروا. بيرجّع كم تصليح عمل.
+function repairChat() {
+  let fixed = 0;
+  for (let i = 0; i < CHAT.length; i++) {
+    const m = CHAT[i];
+    if (m.role !== "user" || !Array.isArray(m.content)) continue;
+    const prev = CHAT[i - 1], ids = new Set(prev && prev.role === "assistant" && Array.isArray(prev.content) ? prev.content.filter(b => b.type === "tool_use").map(b => b.id) : []);
+    const orphans = m.content.filter(b => b.type === "tool_result" && !ids.has(b.tool_use_id));   // نتيجة بدون طلبها
+    if (orphans.length) { m.content = m.content.filter(b => !orphans.includes(b)); fixed += orphans.length; }
+  }
+  for (let i = 0; i < CHAT.length; i++) {
+    const m = CHAT[i];
+    if (m.role !== "assistant" || !Array.isArray(m.content)) continue;
+    const ids = m.content.filter(b => b.type === "tool_use").map(b => b.id);
+    if (!ids.length) continue;
+    let next = CHAT[i + 1];
+    if (!next || next.role !== "user") { next = { role: "user", content: [] }; CHAT.splice(i + 1, 0, next); }
+    if (!Array.isArray(next.content)) next.content = [{ type: "text", text: String(next.content) }];
+    const have = new Set(next.content.filter(b => b.type === "tool_result").map(b => b.tool_use_id));
+    const missing = ids.filter(id => !have.has(id)).map(id => ({ type: "tool_result", tool_use_id: id, is_error: true,
+      content: "This tool call never finished: the turn was interrupted (the add-in was closed or an error stopped it). Check the workbook before repeating it." }));
+    const results = [...next.content.filter(b => b.type === "tool_result"), ...missing], rest = next.content.filter(b => b.type !== "tool_result");
+    const firstText = next.content.findIndex(b => b.type !== "tool_result"), lastResult = next.content.map(b => b.type).lastIndexOf("tool_result");
+    if (missing.length || (firstText >= 0 && lastResult > firstText)) { next.content = [...results, ...rest]; fixed += missing.length || 1; }
+  }
+  // رسالة فاضية بعد التصليح (ما ظلّ فيها ولا إشي) ما بتنبعت
+  CHAT = CHAT.filter(m => !Array.isArray(m.content) || m.content.length);
+  return fixed;
+}
+
 function clearChat() { CHAT = []; UI = []; ctxSent = false; staleChat = false; $("chat").innerHTML = ""; $("cstatus").textContent = ""; $("empty").hidden = false; }
 async function archiveChat() {
   const items = UI.filter(it => ["me", "ai", "step", "err"].includes(it.cls) && String(it.text || "").trim());
