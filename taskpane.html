@@ -109,7 +109,7 @@
   <small>المفتاح بينحفظ على جهازك بس، مش بكود الصفحة. الكتابة بالصوت مجّانية وما بدها مفتاح.</small>
   <button id="save" type="button">احفظ</button>
 </details>
-<script src="core.js?v=20261107"></script>
+<script src="core.js?v=20261107b"></script>
 <script>
 // الأعمدة الجديدة بتنضاف بالآخر عشان الصفوف القديمة بالشيت تضلّ تحت عناوينها
 const INV_HEAD  = ["الملف", "المورّد", "الرقم الضريبي", "رقم الفاتورة", "التاريخ", "العملة", "قبل الضريبة", "الضريبة", "الإجمالي", "ملاحظات المحاسب", "الحساب", "نسبة الضريبة %"];
@@ -377,6 +377,7 @@ How you work:
 - Look before you change anything: use workbook_overview and read_range first. Never assume a layout or a column.
 - Prefer live formulas over typed results so the workbook stays right when data changes. Write formulas with English function names and comma separators. Quote sheet names in references, e.g. ='الفواتير'!I2.
 - Check every number you produce. write_range returns the computed values and any error cells: fix every #REF!, #VALUE!, #DIV/0!, #NAME?, #N/A, #SPILL!. Then cross-check totals a second, independent way (for example, the grand total of a summary equals the SUM of the source column) and tell the accountant what you checked and whether it matched.
+- Bank reconciliation: read both headers, then call bank_reconcile once with the right column letters and, when you can find them, both closing balances. If the statement is only a PDF or picture draft, first write it into its own sheet (date, description, reference, money in, money out, balance; at most 150 rows per write_range). Afterwards explain the result in plain words: the difference, what is only in the bank (fees, interest, transfers: propose the journal entries), what is only in the books (outstanding cheques, deposits in transit), and the near misses to check. Never post entries without the accountant's yes.
 - Numbers read from pictures and scans can be misread, Arabic digits and handwriting most of all. Any reading marked ⟦…؟⟧ in a draft, and any number you have even a slight doubt about, tell the accountant plainly before you use it: which number, where it is, and the possible readings. Never pick one silently.
 - Never delete, clear or overwrite existing data without the accountant's explicit yes in this conversation; only then pass overwrite or confirmed.
 - Deleting by condition (empty rows, duplicates, a value, numbers above or below a limit): use delete_rows_where. Call it first without confirmed: it deletes nothing and returns how many rows match with examples. Show the accountant the count and a few examples, and only after their yes call it again with confirmed: true. Do the same with delete_objects for charts, shapes, pivot tables, tables and named ranges.
@@ -400,6 +401,14 @@ How you work:
 
 const MAX_CELLS = 4000;   // حدّ القراءة بالنداء الواحد
 const MAX_CODES = 300;    // ponytail: أكثر عدد QR/باركود بالنداء الواحد
+const RECON_SIDE = { type: "object", properties: {
+  sheet: { type: "string" }, range: { type: "string", description: "The data block including its header row, e.g. A1:G420" },
+  header_rows: { type: "integer", description: "Header rows at the top of range (default 1)" },
+  date: { type: "string", description: "Column letter of the date" }, description: { type: "string", description: "Column letter" },
+  reference: { type: "string", description: "Column letter of the cheque or reference number, if any" },
+  money_in: { type: "string", description: "Column letter" }, money_out: { type: "string", description: "Column letter" },
+  amount: { type: "string", description: "Column letter of one signed amount column, instead of money_in and money_out" } },
+  required: ["sheet", "range", "date"] };
 const EXCEL_TOOLS = [
   { name: "workbook_overview", description: "List every sheet with its used range and header row, all tables, the active sheet and the current selection. Call it first when you don't know the workbook yet.",
     input_schema: { type: "object", properties: {} } },
@@ -516,7 +525,14 @@ const EXCEL_TOOLS = [
       source: { type: "string", description: "One per row: the cells holding the texts, e.g. A2:A200" },
       to_column: { type: "string", description: "One per row: the column letter the codes go in, e.g. D" },
       size_cm: { type: "number", description: "QR side or barcode height in cm (default 2.5 for QR, 1.5 for barcodes)" },
-      show_text: { type: "boolean", description: "Barcodes: print the code under the bars (default true)" } }, required: ["type"] } }
+      show_text: { type: "boolean", description: "Barcodes: print the code under the bars (default true)" } }, required: ["type"] } },
+  { name: "bank_reconcile", description: `Bank reconciliation done in code: matches a bank statement sheet against the company's bank-account ledger sheet and writes a new reconciliation sheet (summary with live formulas, items only in the bank, items only in the books, near misses to review, and every matched pair with how it matched). Matching order: same reference or cheque number and amount; then same amount with dates at most "days" apart, closest first; then one entry equal to the sum of 2-3 entries on the other side. For each side give column letters: money_in = money into the account and money_out = money out of it (on a bank statement usually Credit/دائن and Debit/مدين; in the company's ledger usually Debit/مدين and Credit/دائن), or one signed amount column (positive = money in). Rows without an amount, and total or balance rows, are skipped. Read the headers first so the letters are right.`,
+    input_schema: { type: "object", properties: {
+      bank: { ...RECON_SIDE, description: "The bank statement" }, book: { ...RECON_SIDE, description: "The bank account in the company's books" },
+      days: { type: "integer", description: "Most days between the two dates of an amount match (default 5)" },
+      bank_balance: { type: "number", description: "Closing balance on the bank statement, if known" },
+      book_balance: { type: "number", description: "Closing balance of the bank account in the books, if known" },
+      output_sheet: { type: "string", description: "Name for the new sheet (default تسوية بنكية)" } }, required: ["bank", "book"] } }
 ];
 
 const ws = (ctx, name) => name ? ctx.workbook.worksheets.getItem(name) : ctx.workbook.worksheets.getActiveWorksheet();
@@ -539,6 +555,7 @@ const EXCEL_LABELS = {
   delete_objects: a => `${a.confirmed ? "بحذف" : "بعدّ"} ${({ charts: "الرسومات", shapes: "الأشكال", pivots: "جداول Pivot", tables: "الجداول", names: "الأسماء" })[a.kind] || a.kind}`,
   add_shape: a => `برسم ${({ line: "خطّ", arrow: "سهم", textbox: "مربّع نصّ" })[String(a.type).toLowerCase()] || "شكل"} عند ${a.from_cell}${a.to_cell ? "←" + a.to_cell : ""}`,
   add_checkboxes: a => `بحطّ ${a.style === "tick_cross" ? "✓/✗" : "مربّعات صح"} بـ ${a.address}`,
+  bank_reconcile: a => `بطابق كشف «${(a.bank && a.bank.sheet) || "البنك"}» مع «${(a.book && a.book.sheet) || "الدفاتر"}»`,
   add_code: a => `بعمل ${String(a.type).toLowerCase() === "qr" ? "QR" : "باركود"} ${a.source ? "لكل صفّ من " + a.source + " بعمود " + (a.to_column || "؟") : "بـ " + (a.cell || "؟")}`,
   manage_sheets: a => (Array.isArray(a.actions) ? a.actions : []).map(x => ({ rename: `بغيّر اسم «${x.sheet}» لـ«${x.new_name}»`, activate: `بفتح «${x.sheet}»`,
     move: `بنقل «${x.sheet}»${x.before ? " قبل «" + x.before + "»" : x.after ? " بعد «" + x.after + "»" : ""}`, tab_color: `بلوّن «${x.sheet}»`, hide: `بخبّي «${x.sheet}»`,
@@ -611,6 +628,196 @@ async function printReport(ctx, s) {
     header: { left: hf.leftHeader, center: hf.centerHeader, right: hf.rightHeader }, footer: { left: hf.leftFooter, center: hf.centerFooter, right: hf.rightFooter },
     gridlines: pl.printGridlines, headings: pl.printHeadings, black_and_white: pl.blackAndWhite, first_page_number: pl.firstPageNumber,
     manual_page_breaks: { rows: hb.items.map(b => b.rowIndex + 1), columns: vb.items.map(b => colName(b.columnIndex + 1)) }, estimate: est };
+}
+
+// ---------- التسوية البنكية: المطابقة بالكود، مش بالنموذج (أدقّ وأرخص، ونفس النتيجة كل مرّة) ----------
+const FILS = x => Math.round(x * 1000);   // الدينار ٣ خانات: منقارن بالفلس عشان ما يغلط الكسر
+const xlSerial = (y, m, d) => Math.round(Date.UTC(y, m - 1, d) / 864e5) + 25569;
+const isoOf = n => n == null ? "" : new Date((n - 25569) * 864e5).toISOString().slice(0, 10);
+const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+function toSerial(v) {
+  if (typeof v === "number") return v > 20000 && v < 80000 ? Math.floor(v) : null;
+  const s = toWestern(String(v ?? "")).trim();
+  let m;
+  if ((m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/))) return xlSerial(+m[1], +m[2], +m[3]);
+  if ((m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/))) {   // بالأردن: يوم/شهر/سنة
+    let d = +m[1], mo = +m[2], y = +m[3];
+    if (y < 100) y += 2000;
+    if (mo > 12 && d <= 12) [d, mo] = [mo, d];
+    return mo >= 1 && mo <= 12 && d >= 1 && d <= 31 ? xlSerial(y, mo, d) : null;
+  }
+  if ((m = s.match(/^(\d{1,2})[-\s]([A-Za-z]{3})[A-Za-z]*[-\s,]+(\d{2,4})/)) && MONTHS[m[2].toLowerCase()]) {
+    const y = +m[3] < 100 ? +m[3] + 2000 : +m[3];
+    return xlSerial(y, MONTHS[m[2].toLowerCase()], +m[1]);
+  }
+  return null;
+}
+function money(v) {
+  if (typeof v === "number") return v;
+  let s = toWestern(String(v ?? "")).trim();
+  if (!s) return null;
+  const neg = /^\(.*\)$/.test(s) || /^-/.test(s) || /-$/.test(s);
+  s = s.replace(/[٬,\s]/g, "").replace(/٫/g, ".").replace(/[^\d.]/g, "");
+  const n = parseFloat(s);
+  return isNaN(n) ? null : neg ? -n : n;
+}
+const refKey = v => { const s = toWestern(String(v ?? "")).replace(/[^0-9A-Za-z]/g, "").replace(/^0+/, "").toUpperCase(); return s.length >= 3 ? s : ""; };
+const TOTAL_ROW = /مجموع|إجمالي|اجمالي|رصيد|total|balance|b\/f|c\/f/i;
+const colIdx = L => [...String(L).toUpperCase()].reduce((a, ch) => a * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+
+// bank وbook: [{row, date (رقم إكسل), desc, ref, refText, amt (بالفلس، موجب = داخل للحساب)}]
+function reconcile(bank, book, days) {
+  const pairs = [], near = [], used = { bank: new Set(), book: new Set() };
+  const free = (side, x) => !used[side].has(x);
+  const take = (b, k, how) => { b.forEach(x => used.bank.add(x)); k.forEach(x => used.book.add(x)); pairs.push({ bank: b, book: k, how }); };
+  const group = (list, key) => { const m = new Map(); for (const x of list) { const k = key(x); if (k) (m.get(k) || m.set(k, []).get(k)).push(x); } return m; };
+  // ١) نفس المرجع (رقم الشيك أو الحوالة) ونفس المبلغ
+  const byRef = group(book, x => x.ref);
+  for (const b of bank) {
+    if (!b.ref) continue;
+    const same = (byRef.get(b.ref) || []).filter(x => free("book", x)), hit = same.find(x => x.amt === b.amt);
+    if (hit) take([b], [hit], "المرجع والمبلغ");
+    else if (same.length) near.push({ bank: b, book: same[0], why: "نفس المرجع بس المبلغ مختلف" });
+  }
+  // ٢) نفس المبلغ والتاريخ ضمن الفترة: الأقرب تاريخاً أوّل، كل حركة مرّة وحدة
+  const byAmt = group(book.filter(x => free("book", x) && x.date != null), x => String(x.amt)), cands = [];
+  for (const b of bank) if (free("bank", b) && b.date != null)
+    for (const k of byAmt.get(String(b.amt)) || []) if (Math.abs(k.date - b.date) <= days) cands.push([Math.abs(k.date - b.date), b, k]);
+  cands.sort((p, q) => p[0] - q[0]);
+  for (const [, b, k] of cands) if (free("bank", b) && free("book", k)) take([b], [k], "المبلغ والتاريخ");
+  // ٣) حركة وحدة = مجموع ٢ أو ٣ من الطرف الثاني (إيداع مجمّع لعدّة مقبوضات، أو عمولات منفصلة)
+  const sums = (one, many, s1, s2) => {
+    for (const t of one) {
+      if (!free(s1, t) || t.date == null) continue;
+      const pool = many.filter(x => free(s2, x) && x.date != null && Math.abs(x.date - t.date) <= days && Math.sign(x.amt) === Math.sign(t.amt) && Math.abs(x.amt) < Math.abs(t.amt)).slice(0, 25);
+      let found = null;
+      for (let i = 0; i < pool.length && !found; i++) for (let j = i + 1; j < pool.length && !found; j++) {
+        if (pool[i].amt + pool[j].amt === t.amt) found = [pool[i], pool[j]];
+        else for (let k = j + 1; k < pool.length && !found; k++) if (pool[i].amt + pool[j].amt + pool[k].amt === t.amt) found = [pool[i], pool[j], pool[k]];
+      }
+      if (found) s1 === "bank" ? take([t], found, `مجموع ${found.length} قيود بالدفاتر`) : take(found, [t], `مجموع ${found.length} حركات بالكشف`);
+    }
+  };
+  sums(bank, book, "bank", "book");
+  sums(book, bank, "book", "bank");
+  const bankOnly = bank.filter(x => free("bank", x)), bookOnly = book.filter(x => free("book", x));
+  // ٤) قريبين بس مش متطابقين: نفس المبلغ بتاريخ أبعد، أو نفس الأرقام بترتيب ثاني (غلط كتابة)
+  const digits = n => String(Math.abs(n)).split("").sort().join("");
+  const nearOK = near.filter(n => free("bank", n.bank) && free("book", n.book));
+  for (const b of bankOnly) {
+    if (nearOK.some(n => n.bank === b)) continue;
+    const far = bookOnly.find(k => k.amt === b.amt && b.date != null && k.date != null && Math.abs(k.date - b.date) <= 60 && !nearOK.some(n => n.book === k));
+    if (far) { nearOK.push({ bank: b, book: far, why: `نفس المبلغ بس بينهم ${Math.abs(far.date - b.date)} يوم` }); continue; }
+    const swap = bookOnly.find(k => k.amt !== b.amt && Math.sign(k.amt) === Math.sign(b.amt) && digits(k.amt) === digits(b.amt) && !nearOK.some(n => n.book === k)
+      && (b.date == null || k.date == null || Math.abs(k.date - b.date) <= days));
+    if (swap) nearOK.push({ bank: b, book: swap, why: "نفس الأرقام بترتيب ثاني: ممكن غلط بالكتابة" });
+  }
+  return { pairs, bankOnly, bookOnly, near: nearOK };
+}
+const bankHint = x => /عمول|رسوم|fee|charge|commission/i.test(x.desc) ? "عمولة أو رسوم بنكية: بدها قيد"
+  : /فائد|فوائد|interest/i.test(x.desc) ? "فوائد: بدها قيد" : /مرتجع|ارجاع|إرجاع|return|bounce/i.test(x.desc) ? "شيك مرتجع: اعكس قيده"
+  : /حوال|transfer|trf/i.test(x.desc) ? "حوالة: تأكّد من الطرف وقيدها" : x.amt > 0 ? "إيداع ما انقيد بالدفاتر" : "سحب ما انقيد بالدفاتر";
+const bookHint = (x, end) => x.date != null && end && end - x.date > 60 ? "قديم (أكثر من شهرين قبل آخر الكشف): راجعه، ممكن غلط بالقيد"
+  : x.amt < 0 ? (x.ref ? "شيك معلّق: ما انصرف لسّا" : "دفعة ما ظهرت بالكشف لسّا") : "إيداع بالطريق";
+
+async function readSide(ctx, side, label) {
+  if (!side || !side.sheet || !side.range || !side.date) throw new Error(`${label}: sheet, range and date are required`);
+  for (const k of ["date", "description", "reference", "money_in", "money_out", "amount"])
+    if (side[k] != null && !/^[A-Za-z]{1,3}$/.test(side[k])) throw new Error(`${label}.${k} must be a column letter, e.g. C`);
+  const s = ws(ctx, side.sheet), r = s.getRange(side.range);
+  r.load("rowIndex,columnIndex,rowCount,columnCount"); await ctx.sync();
+  const hdr = side.header_rows ?? 1, n = r.rowCount - hdr;
+  if (n <= 0) throw new Error(`${label}: no data rows under the header in ${side.range}`);
+  if (n > 20000) throw new Error(`${label}: ${n} rows; at most 20000`);
+  const col = L => {
+    if (!L) return null;
+    const c = colIdx(L);
+    if (c < r.columnIndex || c >= r.columnIndex + r.columnCount) throw new Error(`${label}: column ${L} is outside ${side.range}`);
+    const x = s.getRangeByIndexes(r.rowIndex + hdr, c, n, 1); x.load("values"); return x;
+  };
+  const c = { date: col(side.date), desc: col(side.description), ref: col(side.reference), in: col(side.money_in), out: col(side.money_out), amt: col(side.amount) };
+  if (!c.amt && !c.in && !c.out) throw new Error(`${label}: give money_in and money_out, or amount`);
+  await ctx.sync();
+  const v = (x, i) => x ? x.values[i][0] : "", rows = [];
+  for (let i = 0; i < n; i++) {
+    const a = c.amt ? money(v(c.amt, i)) : Math.abs(money(v(c.in, i)) || 0) - Math.abs(money(v(c.out, i)) || 0);
+    const desc = String(v(c.desc, i) ?? "").trim(), date = toSerial(v(c.date, i));
+    if (!a || (date == null && TOTAL_ROW.test(desc))) continue;   // صفّ فاضي أو رصيد أو مجموع
+    rows.push({ row: r.rowIndex + hdr + i + 1, date, desc, ref: refKey(v(c.ref, i)), refText: String(v(c.ref, i) ?? "").trim(), amt: FILS(a) });
+  }
+  if (!rows.length) throw new Error(`${label}: no amounts found; check the column letters`);
+  return rows;
+}
+
+async function writeRecon(ctx, a, R, bankRows) {
+  const sheets = ctx.workbook.worksheets; sheets.load("items/name"); await ctx.sync();
+  const base = String(a.output_sheet || "تسوية بنكية").slice(0, 28);
+  let name = base;
+  for (let i = 2; sheets.items.some(x => x.name === name); i++) name = `${base} (${i})`;
+  const s = sheets.add(name), out = [], W = 7;
+  const row = (...v) => { const r = Array(W).fill(""); v.forEach((x, i) => { r[i] = x == null ? "" : x; }); out.push(r); return out.length; };
+  const J = x => x / 1000, inA = x => x.amt > 0 ? J(x.amt) : "", outA = x => x.amt < 0 ? J(-x.amt) : "";
+  const T = t => { t = String(t ?? ""); return /^[=+\-@]/.test(t) || /^0\d+$/.test(t) ? "'" + t : t; };   // نصّ بيضلّ نصّ
+  const end = Math.max(0, ...bankRows.map(x => x.date || 0)) || null, days = a.days ?? 5;
+  row("التسوية البنكية");
+  row(`كشف «${a.bank.sheet}» مع دفاتر «${a.book.sheet}»، والتاريخ بفرق لحدّ ${days} أيام` + (end ? `، آخر الكشف ${isoOf(end)}` : ""));
+  row();
+  const S = { bankBal: row("رصيد كشف البنك", a.bank_balance ?? ""), dit: row("+ إيداعات بالدفاتر ما وصلت البنك (بالطريق)"),
+    oc: row("− مدفوعات وشيكات بالدفاتر ما انصرفت (معلّقة)"), adjBank: row("= رصيد البنك بعد التسوية") };
+  row();
+  Object.assign(S, { bookBal: row("رصيد الدفاتر", a.book_balance ?? ""), bin: row("+ إيداعات بالكشف مش مقيودة"), bout: row("− مسحوبات وعمولات بالكشف مش مقيودة"),
+    adjBook: row("= رصيد الدفاتر بعد التسوية") });
+  row();
+  S.diff = row("الفرق (لازم يكون صفر)");
+  row();
+  const secs = [];
+  const section = (title, head, items, cells, kind) => {
+    const t = row(title), h = row(...head), first = out.length + 1;
+    items.forEach(x => row(...cells(x)));
+    const sec = { t, h, first, last: out.length, tot: kind === "one" ? row("المجموع") : null, kind };   // المجموع بس للقسمين اللي بيدخلوا بالملخّص
+    secs.push(sec); row(); return sec;
+  };
+  const HEAD = ["التاريخ", "البيان", "المرجع", "داخل", "طالع", "الصفّ بالأصل", "ملاحظة"];
+  const bOnly = section(`بالكشف ومش بالدفاتر (${R.bankOnly.length})`, HEAD, R.bankOnly, x => [x.date ?? "", T(x.desc), T(x.refText), inA(x), outA(x), x.row, bankHint(x)], "one");
+  const kOnly = section(`بالدفاتر ومش بالكشف (${R.bookOnly.length})`, HEAD, R.bookOnly, x => [x.date ?? "", T(x.desc), T(x.refText), inA(x), outA(x), x.row, bookHint(x, end)], "one");
+  section(`قريبين بس مش متطابقين، راجعهم (${R.near.length})`, ["تاريخ الكشف", "بيان الكشف", "مبلغ الكشف", "تاريخ الدفاتر", "بيان الدفاتر", "مبلغ الدفاتر", "السبب"], R.near,
+    n => [n.bank.date ?? "", T(n.bank.desc), J(n.bank.amt), n.book.date ?? "", T(n.book.desc), J(n.book.amt), n.why], "two");
+  section(`المتطابق (${R.pairs.length})`, ["تاريخ الكشف", "بيان الكشف", "المبلغ", "تاريخ الدفاتر", "بيان الدفاتر", "الصفوف: كشف ← دفاتر", "طريقة المطابقة"], R.pairs,
+    p => [p.bank[0].date ?? "", T(p.bank.map(x => x.desc).join(" + ")), J(p.bank.reduce((t, x) => t + x.amt, 0)), p.book[0].date ?? "", T(p.book.map(x => x.desc).join(" + ")),
+      p.bank.map(x => x.row).join("، ") + " ← " + p.book.map(x => x.row).join("، "), p.how], "pair");
+  for (let k = 0; k < out.length; k += 1000) s.getRange(`A${k + 1}:G${Math.min(out.length, k + 1000)}`).values = out.slice(k, k + 1000);
+  await ctx.sync();
+  // المعادلات: مجاميع الأقسام، والملخّص مربوط فيها (لو صلّحت رقم بالأقسام الملخّص بيتحدّث)
+  const sum = (c, sec) => sec.last >= sec.first ? `=SUM(${c}${sec.first}:${c}${sec.last})` : "=0";
+  const F = (addr, f) => { s.getRange(addr).formulas = [[f]]; };
+  for (const sec of [bOnly, kOnly]) { F(`D${sec.tot}`, sum("D", sec)); F(`E${sec.tot}`, sum("E", sec)); }
+  F(`B${S.dit}`, `=D${kOnly.tot}`); F(`B${S.oc}`, `=E${kOnly.tot}`); F(`B${S.adjBank}`, `=B${S.bankBal}+B${S.dit}-B${S.oc}`);
+  F(`B${S.bin}`, `=D${bOnly.tot}`); F(`B${S.bout}`, `=E${bOnly.tot}`); F(`B${S.adjBook}`, `=B${S.bookBal}+B${S.bin}-B${S.bout}`);
+  F(`B${S.diff}`, `=ROUND(B${S.adjBank}-B${S.adjBook},3)`);
+  // التنسيق
+  const nf = (addr, rows, cols, f) => { if (rows > 0) s.getRange(addr).numberFormat = grid2(rows, cols, f); };
+  const M = "#,##0.000", D = "dd/mm/yyyy";
+  nf(`B${S.bankBal}:B${S.diff}`, S.diff - S.bankBal + 1, 1, M);
+  for (const sec of secs) {
+    const n = sec.last - sec.first + 1;
+    nf(`A${sec.first}:A${sec.last}`, n, 1, D);
+    if (sec.kind === "one") nf(`D${sec.first}:E${sec.tot}`, sec.tot - sec.first + 1, 2, M);
+    else { nf(`C${sec.first}:C${sec.last}`, n, 1, M); nf(`D${sec.first}:D${sec.last}`, n, 1, D); if (sec.kind === "two") nf(`F${sec.first}:F${sec.last}`, n, 1, M); }
+    s.getRange(`A${sec.t}`).format.font.bold = true;
+    const h = s.getRange(`A${sec.h}:G${sec.h}`); h.format.font.bold = true; h.format.fill.color = "#E2EFDA";
+    if (sec.tot) s.getRange(`A${sec.tot}:G${sec.tot}`).format.font.bold = true;
+  }
+  s.getRange("A1").format.font.bold = true;
+  for (const k of ["adjBank", "adjBook", "diff"]) s.getRange(`A${S[k]}:B${S[k]}`).format.font.bold = true;
+  const dc = s.getRange(`B${S.diff}`);
+  for (const [op, color] of [["EqualTo", "#C6EFCE"], ["NotEqualTo", "#FFC7CE"]]) {
+    const cf = dc.conditionalFormats.add("CellValue");
+    cf.cellValue.format.fill.color = color; cf.cellValue.rule = { formula1: "0", operator: op };
+  }
+  s.getRange(`A1:G${out.length}`).format.autofitColumns();
+  s.activate();
+  await ctx.sync();
+  return name;
 }
 
 // رسمة QR أو باركود ← PNG (base64 بدون data:) مع أبعادها
@@ -1011,6 +1218,25 @@ const EXCEL_HANDLERS = {
     return { shape: sh.name };
   }),
 
+  bank_reconcile: (a) => Excel.run(async ctx => {
+    const days = Math.max(0, Math.min(60, Number.isFinite(a.days) ? a.days : 5));
+    const bank = await readSide(ctx, a.bank, "bank"), book = await readSide(ctx, a.book, "book");
+    const R = reconcile(bank, book, days), name = await writeRecon(ctx, { ...a, days }, R, bank);
+    const J = x => x / 1000, tot = (list, sign) => J(list.filter(x => Math.sign(x.amt) === sign).reduce((t, x) => t + Math.abs(x.amt), 0));
+    const brief = list => list.slice(0, 8).map(x => ({ row: x.row, date: isoOf(x.date), description: x.desc.slice(0, 60), amount: J(x.amt) }));
+    const how = {};
+    R.pairs.forEach(p => { how[p.how] = (how[p.how] || 0) + 1; });
+    const res = { sheet: name, rows_read: { bank: bank.length, book: book.length }, matched: R.pairs.length, matched_by: how,
+      bank_only: { count: R.bankOnly.length, money_in: tot(R.bankOnly, 1), money_out: tot(R.bankOnly, -1), first: brief(R.bankOnly) },
+      book_only: { count: R.bookOnly.length, money_in: tot(R.bookOnly, 1), money_out: tot(R.bookOnly, -1), first: brief(R.bookOnly) },
+      near_misses: { count: R.near.length, first: R.near.slice(0, 8).map(n => ({ bank_row: n.bank.row, book_row: n.book.row, bank_amount: J(n.bank.amt), book_amount: J(n.book.amt), why: n.why })) } };
+    if (Number.isFinite(a.bank_balance) && Number.isFinite(a.book_balance)) {
+      const adjBank = a.bank_balance + res.book_only.money_in - res.book_only.money_out, adjBook = a.book_balance + res.bank_only.money_in - res.bank_only.money_out;
+      Object.assign(res, { adjusted_bank: Math.round(adjBank * 1000) / 1000, adjusted_book: Math.round(adjBook * 1000) / 1000, difference: Math.round((adjBank - adjBook) * 1000) / 1000 });
+    } else res.note = "Without both closing balances the summary has no difference yet; ask the accountant for them and type them into the summary.";
+    return res;
+  }),
+
   // QR وباركود كصور فوق الخلايا: بتنرسم هون على canvas (بدون نت غير تحميل المكتبة مرّة وحدة) وبتنحطّ بإكسل
   add_code: (a) => Excel.run(async ctx => {
     if (!apiOK("1.9")) throw new Error("this Excel version can't add pictures (needs ExcelApi 1.9)");
@@ -1255,7 +1481,7 @@ const undoSheetsOf = (name, a) => name === "create_pivot" ? [a.dest_sheet]
   : name === "page_setup" ? []   // الخلايا ما بتتغيّر؛ إعدادات الصفحة إلها صورة لحالها (undoSnapPage)
   : name === "manage_sheets" ? (Array.isArray(a.actions) ? a.actions : []).map(x => x.sheet).filter(Boolean)
   : name === "move_range" ? [a.table ? null : a.sheet || "", a.to_sheet || null].filter(x => x !== null)
-  : name === "add_sheet" || name === "define_name" || (name === "delete_objects" && a.kind === "names") ? [] : [a.sheet || ""];
+  : name === "add_sheet" || name === "define_name" || name === "bank_reconcile" || (name === "delete_objects" && a.kind === "names") ? [] : [a.sheet || ""];
 // نصّ شكله رقم أو تاريخ («00123») لازم يرجع نصّ، مش رقم
 const looksTyped = v => typeof v === "string" && v[0] !== "=" && (/^(true|false)$/i.test(v) || (/\d/.test(v) && /^[\s\d.,:\/+\-%()$٠-٩٫٬]+$/.test(v)));
 const undoNames = c => c ? c.items.map(x => x.name) : null;
