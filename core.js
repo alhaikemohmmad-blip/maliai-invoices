@@ -150,23 +150,33 @@ function shrink(src, w, h) {   // src: صورة أو canvas بحجمها الأ�
   g.drawImage(src, 0, 0, c.width, c.height);
   return c.toDataURL("image/jpeg", 0.9);
 }
-// رؤية أقوى لصور التلفون: الصورة الأصليّة (لحدّ ١٢ ميغابكسل) أكبر بكثير من اللي بيقبله Claude بالصورة الوحدة،
-// فبنبعت الصفحة كاملة (للترتيب) + ٢ أو ٣ أجزاء مكبّرة متداخلة شوي (للأرقام الصغيرة)، كلها بأوضح حجم مسموح
-function zoomViews(src, w, h) {
-  const full = shrink(src, w, h), ratio = (w * h) / MAX_PIXELS;
-  if (ratio < 1.6) return [full];   // الصورة أصلاً قريبة من أوضح حجم: التكبير ما بيزيد تفاصيل
-  const n = ratio > 4 ? 3 : 2, tall = h >= w, L = tall ? h : w, step = L / n, ov = L * 0.06, out = [full];
-  for (let k = 0; k < n; k++) {
-    const a = Math.max(0, k * step - ov), b = Math.min(L, (k + 1) * step + ov);
-    const [sx, sy, sw, sh] = tall ? [0, a, w, b - a] : [a, 0, b - a, h], s = fitScale(sw, sh);
-    const [c, g] = canvasFor(sw * s, sh * s);
-    g.imageSmoothingQuality = "high";
-    g.drawImage(src, sx, sy, sw, sh, 0, 0, c.width, c.height);
-    out.push(c.toDataURL("image/jpeg", 0.9));
-  }
-  return out;
+// رؤية أقوى بأداة «تكبير»: Claude بيشوف الصفحة كاملة، ولمّا رقم يكون صغير أو مش واضح بيطلب يكبّر هديك الزاوية
+// من الصورة الأصليّة (لحدّ ١٢ ميغابكسل). بيدفع بس على اللي بيكبّره، والتكبير على قدّ الرقم أوضح من أجزاء ثابتة
+const clamp01 = v => Math.min(1, Math.max(0, Number(v) || 0));
+function cropView(src, W, H, r = {}) {
+  const sx = clamp01(r.x) * W, sy = clamp01(r.y) * H;
+  const cw = Math.min(Math.max(8, clamp01(r.w ?? 1) * W), W - sx), ch = Math.min(Math.max(8, clamp01(r.h ?? 1) * H), H - sy);
+  if (cw < 4 || ch < 4) throw new Error("that region is outside the picture");
+  const s = Math.min(3, MAX_SIDE / Math.max(cw, ch), Math.sqrt(MAX_PIXELS / (cw * ch)));   // الرقم الصغير بيكبر لحدّ ٣ أضعاف
+  const [c, g] = canvasFor(cw * s, ch * s);
+  g.imageSmoothingQuality = "high";
+  g.drawImage(src, sx, sy, cw, ch, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", 0.92);
 }
-const ZOOM_NOTE = n => `\n\nThe first picture is the whole page. The next ${n} pictures are enlarged parts of the same page, in order (top to bottom, or left to right), overlapping a little: read small or unclear digits from the enlarged parts and use the whole page for the layout. It is all one page, so never list a line twice.`;
+// صفحة PDF: بنرسمها بدقّة أعلى على قدّ الجزء المطلوب، وبعدين بنقصّه
+async function pdfZoom(pdf, n, r = {}) {
+  const page = await pdf.getPage(n), v1 = page.getViewport({ scale: 1 });
+  const rw = Math.max(1, clamp01(r.w ?? 1) * v1.width), rh = Math.max(1, clamp01(r.h ?? 1) * v1.height);
+  const s = Math.min(8, MAX_SIDE / Math.max(rw, rh), Math.sqrt(MAX_PIXELS / (rw * rh)), Math.sqrt(30e6 / (v1.width * v1.height)));
+  const vp = page.getViewport({ scale: s }), [c, g] = canvasFor(vp.width, vp.height);
+  await page.render({ canvasContext: g, viewport: vp, intent: "print" }).promise;
+  return cropView(c, c.width, c.height, r);
+}
+const viewOf = (src, w, h) => r => cropView(src, w, h, r);
+const ZOOM_TOOL = { name: "zoom", description: "Look closer at part of a picture: returns that region of the original, enlarged as far as it allows. Use it before answering on every number that is small, faint, handwritten, stamped over or not perfectly clear, and always on the totals. x, y, w, h are fractions of the picture's width and height (0 to 1) from its top-left corner; choose a region about the size of the numbers you need, not the whole page.",
+  input_schema: { type: "object", properties: { picture: { type: "integer", description: "Which picture, 1 for the first" }, x: { type: "number" }, y: { type: "number" }, w: { type: "number" }, h: { type: "number" } }, required: ["x", "y", "w", "h"] } };
+const ZOOM_HINT = "\n\nYou have a zoom tool that enlarges any part of the original picture. Zoom on every number that is small, faint, handwritten or not perfectly clear, and on the totals, and read it from the enlarged view before you answer.";
+const MAX_ZOOMS = 4;   // ponytail: أكثر عدد تكبيرات بالقراءة الوحدة (كل تكبير لحدّ ~٤٨٠٠ توكن)
 const isPdf = (file, ext) => file.type === "application/pdf" || ext === "pdf";
 async function openPdf(file) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
@@ -183,28 +193,32 @@ async function pdfPageImage(pdf, n) {
 }
 async function toParts(file) {
   const ext = (file.name || "").toLowerCase().split(".").pop();
+  // كل صورة معها zoomer (للتكبير من الأصل) و original (للحفظ مع المسودة)
+  const one = (src, w, h) => ({ images: [shrink(src, w, h)], zoomers: [viewOf(src, w, h)], originals: [{ src, w, h }] });
   if (isPdf(file, ext)) {
-    const pdf = await openPdf(file), images = [];
-    for (let n = 1; n <= Math.min(pdf.numPages, MAX_PAGES); n++) images.push(await pdfPageImage(pdf, n));
-    return { images };
+    const pdf = await openPdf(file), images = [], zoomers = [];
+    for (let n = 1; n <= Math.min(pdf.numPages, MAX_PAGES); n++) { images.push(await pdfPageImage(pdf, n)); zoomers.push(r => pdfZoom(pdf, n, r)); }
+    return { images, zoomers };
   }
   if (/^(heic|heif)$/.test(ext) || /hei[cf]/.test(file.type)) {   // صور الآيفون
     await lib("heic");
     const jpg = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.9 });
     const bmp = await createImageBitmap(Array.isArray(jpg) ? jpg[0] : jpg);
-    const images = zoomViews(bmp, bmp.width, bmp.height);
-    return { images, zoom: images.length - 1 };
+    return one(bmp, bmp.width, bmp.height);
   }
   if (/^tiff?$/.test(ext) || file.type === "image/tiff") {           // السكانرات
     await lib("utif");
     const buf = await file.arrayBuffer();
     const pages = UTIF.decode(buf).filter(p => p.t256).slice(0, MAX_PAGES);   // t256 = العرض؛ width بينعبّى بعد decodeImage
-    return { images: pages.map(p => {
+    const out = { images: [], zoomers: [], originals: [] };
+    for (const p of pages) {
       UTIF.decodeImage(buf, p);
       const c = document.createElement("canvas"); c.width = p.width; c.height = p.height;
       c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(UTIF.toRGBA8(p)), p.width, p.height), 0, 0);
-      return shrink(c, p.width, p.height);
-    }) };
+      const o = one(c, p.width, p.height);
+      out.images.push(...o.images); out.zoomers.push(...o.zoomers); out.originals.push(...o.originals);
+    }
+    return out;
   }
   if (/^(xlsx|xlsm|xlsb|xls|ods)$/.test(ext)) {
     await lib("xlsx");
@@ -217,11 +231,9 @@ async function toParts(file) {
       { convertImage: mammoth.images.imgElement(() => Promise.resolve({ src: "" })) });
     return { text: r.value };
   }
-  try {
-    const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
-    const images = zoomViews(bmp, bmp.width, bmp.height);
-    return { images, zoom: images.length - 1 };
-  } catch (e) {}
+  let bmp = null;
+  try { bmp = await createImageBitmap(file, { imageOrientation: "from-image" }); } catch (e) {}
+  if (bmp) return one(bmp, bmp.width, bmp.height);
   const text = await file.text();   // XML / CSV / TXT / HTML / EML…
   if (!text.trim() || text.slice(0, 2000).includes("\u0000"))
     throw new Error(`صيغة .${ext} مش مدعومة — حوّلها PDF أو صورة`);
@@ -230,26 +242,42 @@ async function toParts(file) {
 
 // ---------- نداء واحد للنموذج لكل فاتورة ----------
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-async function askClaude(images, prompt, c, signal, effort = "low") {
+const imgBlock = url => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: url.slice(url.indexOf(",") + 1) } });
+// zoomers: لكل صورة دالّة بتقصّ منطقة من الأصل؛ لو موجودة، Claude بياخد أداة zoom وبيكبّر اللي بدّه قبل ما يجاوب
+async function askClaude(images, prompt, c, signal, effort = "low", zoomers = null) {
   const { default: Anthropic } = await import(ANTHROPIC_SDK);
   // المفتاح من إعدادات هالجهاز، مش من كود الصفحة
   const client = new Anthropic({ apiKey: c.key, baseURL: c.url || undefined, dangerouslyAllowBrowser: true });
   // fallbacks بيشتغل على هالنماذج بس (Haiku ما بيدعمه)
   const fb = /^claude-(opus-5|fable-5|sonnet-5-5)/.test(c.model) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" } : {};
+  const zoom = Array.isArray(zoomers) && zoomers.some(Boolean);
+  const messages = [{ role: "user", content: [...images.map(imgBlock), { type: "text", text: prompt + (zoom ? ZOOM_HINT : "") }] }];
+  let zooms = 0;
   try {
-    const msg = await client.beta.messages.create({
-      model: c.model, max_tokens: 16000,
-      output_config: { effort },   // القراءة العادية low (أسرع)، والتدقيق بعد خلاف بين قراءتين high
-      ...fb,
-      system: SYSTEM,
-      messages: [{ role: "user", content: [
-        ...images.map(url => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: url.slice(url.indexOf(",") + 1) } })),
-        { type: "text", text: prompt }
-      ] }]
-    }, { signal });
-    addSpend(msg.model || c.model, msg.usage);
-    if (msg.stop_reason === "refusal") throw new Error("Claude رفض يقرأ هالملف");
-    return msg.content.filter(b => b.type === "text").map(b => b.text).join("");
+    for (let round = 0; ; round++) {
+      const last = round >= MAX_ZOOMS + 1;   // آخر جولة: بدون أدوات، لازم يجاوب
+      const msg = await client.beta.messages.create({
+        model: c.model, max_tokens: 16000,
+        output_config: { effort },   // القراءة العادية low (أسرع)، والتدقيق بعد خلاف بين قراءتين high
+        ...fb,
+        // مع التكبير: الطلب بيتكرّر بكل جولة، فالكاش بيخلّي الصور اللي قبل تنقرا بعُشر السعر
+        ...(zoom ? { tools: [ZOOM_TOOL], tool_choice: { type: last ? "none" : "auto" }, cache_control: { type: "ephemeral" } } : {}),
+        system: SYSTEM,
+        messages
+      }, { signal });
+      addSpend(msg.model || c.model, msg.usage);
+      if (msg.stop_reason === "refusal") throw new Error("Claude رفض يقرأ هالملف");
+      if (!zoom || msg.stop_reason !== "tool_use") return msg.content.filter(b => b.type === "text").map(b => b.text).join("");
+      messages.push({ role: "assistant", content: msg.content });
+      const results = [];
+      for (const b of msg.content.filter(b => b.type === "tool_use")) {
+        const z = zoomers[Math.max(1, Math.round(b.input.picture || 1)) - 1];
+        if (++zooms > MAX_ZOOMS || !z) { results.push({ type: "tool_result", tool_use_id: b.id, is_error: true, content: z ? "No more zooms: answer now with what you have, marking any doubt." : "There is no such picture." }); continue; }
+        try { results.push({ type: "tool_result", tool_use_id: b.id, content: [imgBlock(await z(b.input))] }); }
+        catch (e) { results.push({ type: "tool_result", tool_use_id: b.id, is_error: true, content: String((e && e.message) || e) }); }
+      }
+      messages.push({ role: "user", content: results });
+    }
   } catch (e) {
     if (e instanceof Anthropic.APIUserAbortError) throw new Error("اتوقّف");
     if (creditOut(e)) throw new Error(NO_CREDIT);
@@ -304,7 +332,10 @@ const VAULT_TOOLS = [
     input_schema: { type: "object", properties: {
       path: { type: "string", description: "e.g. ذاكرة/الموردين.md" }, content: { type: "string" }, mode: { type: "string", enum: ["create", "append", "replace"] } }, required: ["path", "content", "mode"] } },
   { name: "vault_delete", description: "Delete one of your memory notes under ذاكرة/ that is wrong or no longer needed.",
-    input_schema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } }
+    input_schema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+  { name: "zoom_image", description: "Look at the original picture behind a draft (drafts read from photos or scanned pages keep it; the vault list says «picture saved»). Returns that page, or a part of it enlarged as far as the original allows. Use it before asking the accountant about any number marked ⟦…؟⟧ or any digit you are unsure of: first the whole page if you need the layout, then a small region around the number. x, y, w, h are fractions of the page (0 to 1) from its top-left corner; leave them out for the whole page.",
+    input_schema: { type: "object", properties: { path: { type: "string", description: "The draft, e.g. مسودات/فاتورة.jpg.md" }, page: { type: "integer", description: "Page number, 1 for the first" },
+      x: { type: "number" }, y: { type: "number" }, w: { type: "number" }, h: { type: "number" } }, required: ["path"] } }
 ];
 
 // شكل طلب المحادثة ثابت بالزبط عشان الكاش: الأدوات والتعليمات ما بتتغيّر أبداً (بينكاشوا ساعة وبيخدموا كل المحادثات)،
@@ -336,10 +367,31 @@ const chatParams = (c, messages) => {
 
 const VAULT_LABELS = {
   vault_search: a => `🧠 بدوّر بالخزنة عن «${a.query}»`, vault_read: a => `🧠 بقرأ ${a.path}${a.from_line > 1 ? " من سطر " + a.from_line : ""}`,
-  vault_write: a => `🧠 ${a.mode === "append" ? "زدت على" : "حفظت"} ${a.path}`, vault_delete: a => `🧠 مسحت ${a.path}`
+  vault_write: a => `🧠 ${a.mode === "append" ? "زدت على" : "حفظت"} ${a.path}`, vault_delete: a => `🧠 مسحت ${a.path}`,
+  zoom_image: a => `🔍 بكبّر ${title(String(a.path || ""))}${a.page > 1 ? " صفحة " + a.page : ""}${a.w != null && a.w < 1 ? " (جزء منها)" : ""}`
 };
 
 const VAULT_HANDLERS = {
+  // بيرجّع صورة (مش JSON): chatSend بيحطّ __blocks زي ما هي بنتيجة الأداة
+  zoom_image: async ({ path, page = 1, x = 0, y = 0, w = 1, h = 1 }) => {
+    const n = findNote(path);
+    if (!n.pics) throw new Error(`${n.path} has no saved picture; only drafts read from photos or scanned pages keep one`);
+    page = Math.round(page) || 1;
+    if (page < 1 || page > n.pics) throw new Error(`${n.path} has ${n.pics} page(s)`);
+    const r = { x, y, w, h };
+    let url;
+    if (n.picKind === "pdf") {
+      const blob = await idb.get(picKey(n.path, "pdf"));
+      if (!blob) throw new Error("the saved PDF is missing");
+      url = await pdfZoom(await openPdf(blob), page, r);
+    } else {
+      const blob = await idb.get(picKey(n.path, page));
+      if (!blob) throw new Error("the saved picture is missing");
+      const bmp = await createImageBitmap(blob);
+      url = cropView(bmp, bmp.width, bmp.height, r);
+    }
+    return { __blocks: [imgBlock(url), { type: "text", text: `${n.path}, page ${page}` + (w < 1 || h < 1 ? `, region x=${x} y=${y} w=${w} h=${h}` : ", whole page") }] };
+  },
   vault_search: ({ query, folder }) => searchVault(query, folder),
   vault_read: readNote,
   vault_write: writeNote,
@@ -456,7 +508,10 @@ async function putNote(n) {
   return n;
 }
 async function removeNote(path) {
+  const n = VAULT.get(path);
   await idb.del("note:" + path);
+  // الصورة الأصليّة المحفوظة مع المسودة بتنمسح معها
+  if (n && n.pics) for (const k of n.picKind === "pdf" ? ["pdf"] : Array.from({ length: n.pics }, (_, i) => i + 1)) await idb.del(picKey(path, k)).catch(() => {});
   VAULT.delete(path); renderVault();
 }
 async function loadVault() {
@@ -528,7 +583,7 @@ async function writeNote({ path, content, mode }) {
 
 // أوّل رسالة بكل محادثة: فهرس الخزنة (والذاكرة كاملة إذا صغيرة)، عشان التعليمات نفسها تضلّ ثابتة بالكاش
 const gist = n => (n.text.split("\n").find(l => l.trim() && !l.startsWith("#")) || "").trim().slice(0, 120);
-const draftLine = n => `- ${n.path} — ${n.meta}, ${n.text.split("\n").length} lines, ${day(n.at)}`;
+const draftLine = n => `- ${n.path} — ${n.meta}, ${n.text.split("\n").length} lines, ${day(n.at)}${n.pics ? ", picture saved (zoom_image)" : ""}`;
 function vaultContext() {
   const all = [...VAULT.values()].sort((a, b) => a.path.localeCompare(b.path, "ar"));
   const mem = all.filter(n => n.path.startsWith(MEM_DIR)), drafts = all.filter(n => n.path.startsWith(DRAFT_DIR) && !n.path.startsWith(CHAT_DIR));
@@ -646,11 +701,9 @@ function numDiff(a, b) {   // الأرقام اللي بقراءة وحدة وم
   return { a: onlyA, b: [...left].flatMap(([n, k]) => Array(k).fill(n)) };
 }
 const DOUBT_MARK = /⟦[^⟧]*⟧/g;
-// imgs: صفحة وحدة؛ أوّل صورة الصفحة كاملة، والباقي (لو في) أجزاء مكبّرة منها
-async function ocr(imgs, c, signal) {
-  imgs = [].concat(imgs);
-  const zoom = imgs.length > 1 ? ZOOM_NOTE(imgs.length - 1) : "";
-  const ask = (p, effort) => (c.provider === "anthropic" ? askClaude : askOpenAI)(imgs, p + zoom, c, signal, effort);
+// صفحة وحدة: الصورة اللي بتنبعت، ومعها zoomer بيكبّر أيّ جزء من الأصل لمّا Claude يطلب
+async function ocr(img, c, signal, zoomer = null) {
+  const ask = (p, effort) => c.provider === "anthropic" ? askClaude([img], p, c, signal, effort, zoomer ? [zoomer] : null) : askOpenAI([img], p, c, signal);
   const [text, list] = await Promise.all([ask(OCR_PROMPT), ask(NUMS_PROMPT).catch(e => { if (signal && signal.aborted) throw e; return ""; })]);
   if (!list.trim()) return text;
   // الأرقام اللي عليها علامة شكّ بتنحسب مختلف عليها، فبتنعاد تدقيقها كمان
@@ -680,17 +733,29 @@ async function fileToDraft(file, c, signal) {
     }
     let next = 0;
     await Promise.all(Array.from({ length: Math.min(PARALLEL, scanned.length) }, async () => {
-      while (next < scanned.length) { const p = scanned[next++]; text[p - 1] = await ocr(await pdfPageImage(pdf, p), c, signal); }
+      while (next < scanned.length) { const p = scanned[next++]; text[p - 1] = await ocr(await pdfPageImage(pdf, p), c, signal, r => pdfZoom(pdf, p, r)); }
     }));
-    return { kind: "pdf", text: pages(text, "صفحة"),
+    return { kind: "pdf", text: pages(text, "صفحة"), pdf: scanned.length ? file : null, pics: scanned.length ? n : 0,   // المصوّر بينحفظ عشان التكبير بعدين
       meta: `PDF، ${nPages(pdf.numPages)}` + (scanned.length ? `، ${scanned.length} منها انقرت بالنموذج` : "") + (pdf.numPages > n ? `، أوّل ${n} بس` : "") };
   }
   const parts = await toParts(file);   // Word وXML وCSV نصّ؛ الصور بتنقرا بالنموذج مرّة وحدة
   if (parts.text) return { kind: "text", meta: `ملف .${ext}`, text: parts.text };
   const text = [];
-  if (parts.zoom) text.push(await ocr(parts.images, c, signal));   // صورة وحدة + أجزاءها المكبّرة = صفحة وحدة
-  else for (const img of parts.images) text.push(await ocr(img, c, signal));
-  return { kind: "image", meta: text.length > 1 ? `صور، ${nPages(text.length)}، انقرت بالنموذج` : "صورة، انقرت بالنموذج", text: pages(text, "صفحة") };
+  for (let i = 0; i < parts.images.length; i++) text.push(await ocr(parts.images[i], c, signal, parts.zoomers && parts.zoomers[i]));
+  return { kind: "image", originals: parts.originals || [], pics: (parts.originals || []).length,
+    meta: text.length > 1 ? `صور، ${nPages(text.length)}، انقرت بالنموذج` : "صورة، انقرت بالنموذج", text: pages(text, "صفحة") };
+}
+// الصورة الأصليّة بتنحفظ مع المسودة (لحدّ ١٢ ميغابكسل) عشان المساعد يقدر يكبّر منها بعدين بأداة zoom_image
+const picKey = (path, page) => `pic:${path}#${page}`;
+async function savePics(path, d) {
+  if (d.pdf) { await idb.set(picKey(path, "pdf"), d.pdf); return "pdf"; }
+  for (let i = 0; i < (d.originals || []).length; i++) {
+    const { src, w, h } = d.originals[i], s = Math.min(1, 4096 / Math.max(w, h), Math.sqrt(12.5e6 / (w * h)));
+    const [cv, g] = canvasFor(w * s, h * s);
+    g.drawImage(src, 0, 0, cv.width, cv.height);
+    await idb.set(picKey(path, i + 1), await new Promise(ok => cv.toBlob(ok, "image/jpeg", 0.88)));
+  }
+  return "img";
 }
 
 async function draftFor(file, c, signal) {
@@ -702,7 +767,9 @@ async function draftFor(file, c, signal) {
   const base = DRAFT_DIR + safeName(file.name || "صورة ملصوقة");
   let path = base + ".md";
   for (let i = 2; VAULT.has(path); i++) path = `${base} (${i}).md`;   // نفس الاسم لملف مختلف
-  return { note: await putNote({ path, text: `# ${file.name || "صورة ملصوقة"}\n\n${d.text}`, src: file.name || "", meta: d.meta, kind: d.kind, hash }), reused: false };
+  const picKind = d.pics ? await savePics(path, d).catch(() => "") : "";
+  return { note: await putNote({ path, text: `# ${file.name || "صورة ملصوقة"}\n\n${d.text}`, src: file.name || "", meta: d.meta, kind: d.kind, hash,
+    ...(picKind ? { pics: d.pics, picKind } : {}) }), reused: false };
 }
 
 async function attachmentBlocks(files, c, signal) {
@@ -715,7 +782,10 @@ async function attachmentBlocks(files, c, signal) {
     (r.reused ? olds : news).push(title(n.path));
     if (marks.length) doubts.push({ name, marks });
     const head = `Attached file «${name}» ${r.reused ? "was read before; its draft is" : "is now read and saved as"} ${n.path} (${n.meta}, ${lines.length} lines)` +
-      (marks.length ? `. It has ${marks.length} uncertain number reading${marks.length > 1 ? "s" : ""} marked ⟦…؟⟧ (search the draft for ⟦ to find them all): before you use any of them, tell the accountant each one, where it is and the possible readings, and ask them to confirm` : "");
+      (n.pics ? ". Its original picture is saved: zoom_image can enlarge any part of it" : "") +
+      (marks.length ? `. It has ${marks.length} uncertain number reading${marks.length > 1 ? "s" : ""} marked ⟦…؟⟧ (search the draft for ⟦ to find them all): ` +
+        (n.pics ? "zoom on each one first; for any still unclear, tell the accountant where it is and the possible readings, and ask them to confirm before you use it"
+          : "before you use any of them, tell the accountant each one, where it is and the possible readings, and ask them to confirm") : "");
     blocks.push({ type: "text", text: n.text.length <= INLINE_DRAFT ? `${head}:\n${n.text}`
       : `${head}. First ${PREVIEW_LINES} lines; read the rest with vault_search / vault_read:\n${lines.slice(0, PREVIEW_LINES).join("\n").slice(0, INLINE_DRAFT)}` });
   });
@@ -814,7 +884,7 @@ async function chatSend() {
           // صورة من الشيت قبل أوّل تعديل عليه، عشان زرّ «تراجع» (لو فشلت، التعديل بيمشي عادي)
           if (MALI.beforeTool) await MALI.beforeTool(b.name, b.input || {}).catch(e => console.warn("MaliAI undo snapshot", e));
           const out = await MALI.handlers[b.name](b.input || {});
-          results.push({ type: "tool_result", tool_use_id: b.id, content: JSON.stringify(out) });
+          results.push({ type: "tool_result", tool_use_id: b.id, content: out && out.__blocks ? out.__blocks : JSON.stringify(out) });
           line.set("✓ " + label + (out.errors && out.errors.length ? ` (${out.errors.length} خطأ بالمعادلات، بصلّحهم)` : ""));
         } catch (e) {
           results.push({ type: "tool_result", tool_use_id: b.id, content: String((e && (e.debugInfo && e.debugInfo.message || e.message)) || e), is_error: true });

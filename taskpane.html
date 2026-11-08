@@ -109,7 +109,7 @@
   <small>المفتاح بينحفظ على جهازك بس، مش بكود الصفحة. الكتابة بالصوت مجّانية وما بدها مفتاح.</small>
   <button id="save" type="button">احفظ</button>
 </details>
-<script src="core.js?v=20261108b"></script>
+<script src="core.js?v=20261108c"></script>
 <script>
 // الأعمدة الجديدة بتنضاف بالآخر عشان الصفوف القديمة بالشيت تضلّ تحت عناوينها
 const INV_HEAD  = ["الملف", "المورّد", "الرقم الضريبي", "رقم الفاتورة", "التاريخ", "العملة", "قبل الضريبة", "الضريبة", "الإجمالي", "ملاحظات المحاسب", "الحساب", "نسبة الضريبة %"];
@@ -160,11 +160,11 @@ drop.ondragleave = () => drop.classList.remove("over");
 drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); addFiles(e.dataTransfer.files); };
 $("clear").onclick = () => { queue.length = 0; $("list").innerHTML = ""; addFiles([]); setStatus(""); };
 
-async function extract({ images = [], text = "", zoom = 0 }, c, extra = "", signal, effort = "low") {
+async function extract({ images = [], text = "", zoomers = null }, c, extra = "", signal, effort = "low") {
   if (!images.length && !text.trim()) throw new Error("ما لقيت إشي أقرأه بالملف");
-  // صورة تلفون: الصفحة كاملة + أجزاء مكبّرة منها (رؤية أوضح للأرقام الصغيرة)
-  const prompt = (text ? PROMPT + "\n\nInvoice content:\n" + text.slice(0, MAX_TEXT) : PROMPT) + (zoom ? ZOOM_NOTE(zoom) : "") + extra;
-  const content = c.provider === "anthropic" ? await askClaude(images, prompt, c, signal, effort) : await askOpenAI(images, prompt, c, signal);
+  const prompt = (text ? PROMPT + "\n\nInvoice content:\n" + text.slice(0, MAX_TEXT) : PROMPT) + extra;
+  // الصور: Claude بياخد أداة zoom بيكبّر فيها أيّ رقم مش واضح من الصورة الأصليّة
+  const content = c.provider === "anthropic" ? await askClaude(images, prompt, c, signal, effort, zoomers) : await askOpenAI(images, prompt, c, signal);
   const m = String(content).match(/\{[\s\S]*\}/);
   if (!m) throw new Error("النموذج ما رجّع بيانات مفهومة");
   return JSON.parse(m[0]);
@@ -415,7 +415,7 @@ How you work:
 - Prefer live formulas over typed results so the workbook stays right when data changes. Write formulas with English function names and comma separators. Quote sheet names in references, e.g. ='الفواتير'!I2.
 - Check every number you produce. write_range returns the computed values and any error cells: fix every #REF!, #VALUE!, #DIV/0!, #NAME?, #N/A, #SPILL!. Then cross-check totals a second, independent way (for example, the grand total of a summary equals the SUM of the source column) and tell the accountant what you checked and whether it matched.
 - Bank reconciliation: read both headers, then call bank_reconcile once with the right column letters and, when you can find them, both closing balances. If the statement is only a PDF or picture draft, first write it into its own sheet (date, description, reference, money in, money out, balance; at most 150 rows per write_range). Afterwards explain the result in plain words: the difference, what is only in the bank (fees, interest, transfers: propose the journal entries), what is only in the books (outstanding cheques, deposits in transit), and the near misses to check. Never post entries without the accountant's yes.
-- Numbers read from pictures and scans can be misread, Arabic digits and handwriting most of all. Any reading marked ⟦…؟⟧ in a draft, and any number you have even a slight doubt about, tell the accountant plainly before you use it: which number, where it is, and the possible readings. Never pick one silently.
+- Numbers read from pictures and scans can be misread, Arabic digits and handwriting most of all. Any reading marked ⟦…؟⟧ in a draft, and any number you have even a slight doubt about: when the draft keeps its picture, look first with zoom_image (a small region around the number); if it is still not certain, tell the accountant plainly before you use it: which number, where it is, and the possible readings. Never pick one silently.
 - Never delete, clear or overwrite existing data without the accountant's explicit yes in this conversation; only then pass overwrite or confirmed.
 - Deleting by condition (empty rows, duplicates, a value, numbers above or below a limit): use delete_rows_where. Call it first without confirmed: it deletes nothing and returns how many rows match with examples. Show the accountant the count and a few examples, and only after their yes call it again with confirmed: true. Do the same with delete_objects for charts, shapes, pivot tables, tables and named ranges.
 - Removing colors and formatting: use clear_formatting on exactly the range asked (fills, font colors, bold and italic, borders, conditional formatting, drop-down validation, number formats, checkboxes). It never touches the values.
