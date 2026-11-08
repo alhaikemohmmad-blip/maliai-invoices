@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="pair.js"></script>
+<script src="pair.js?v=20261108"></script>
 <style>
 :root{ --bg:#ffffff; --bg2:#f3f6f4; --fg:#18201b; --fg2:#5b6660; --line:#dde3df; --accent:#107c41; --accent2:#0d6435; --tint:#e6f3eb; --err:#c0392b; --rec:#d23a2a; }
 @media (prefers-color-scheme: dark){ :root{ --bg:#161b18; --bg2:#202722; --fg:#e8eee9; --fg2:#a0aca5; --line:#343d37; --accent:#2ea866; --accent2:#3cc078; --tint:#1c3326; --err:#ff7b6b; --rec:#ff6a5a; } }
@@ -19,7 +19,7 @@ body{ margin:0; padding:16px 16px calc(16px + env(safe-area-inset-bottom)); back
 header{ display:flex; align-items:baseline; gap:8px; }
 header b{ font-size:19px; color:var(--accent); }
 header span{ color:var(--fg2); font-size:14px; }
-#state{ margin:0; padding:8px 12px; border-radius:10px; background:var(--bg2); color:var(--fg2); font-size:14px; }
+#state{ margin:0; padding:8px 12px; border-radius:10px; background:var(--bg2); color:var(--fg2); font-size:14px; white-space:pre-line; }
 #state.on{ background:var(--tint); color:var(--accent); font-weight:600; }
 #state.bad{ color:var(--err); }
 textarea{ flex:1; min-height:160px; width:100%; padding:14px; border:1px solid var(--line); border-radius:14px; background:var(--bg); color:var(--fg); font:inherit; font-size:17px; resize:none; }
@@ -34,13 +34,23 @@ button:disabled{ opacity:.45; }
 #mic svg{ width:30px; height:30px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 #send{ flex:1; height:56px; background:var(--accent); color:#fff; font-weight:700; font-size:17px; }
 #clear{ flex:none; height:56px; padding:0 14px; background:var(--bg2); color:var(--fg2); }
+#cam{ width:100%; height:56px; background:var(--tint); color:var(--accent); font-weight:700; font-size:17px; border:1.5px dashed var(--accent); }
+#photos{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; max-height:32vh; overflow:auto; }
+#photos li{ display:flex; align-items:center; gap:10px; padding:6px 8px; border-radius:10px; background:var(--bg2); font-size:14px; }
+#photos img{ flex:none; width:44px; height:44px; border-radius:8px; object-fit:cover; }
+#photos .st{ color:var(--fg2); }
+#photos li.ok .st{ color:var(--accent); font-weight:600; }
+#photos li.bad .st{ color:var(--err); }
 @keyframes pulse{ 50%{ box-shadow:0 0 0 10px color-mix(in srgb, var(--rec) 25%, transparent); } }
 @media (prefers-reduced-motion: reduce){ *{ animation:none !important; } }
 </style>
 </head>
 <body>
-<header><b>MaliAI</b><span>احكي، والكلام بيوصل لكمبيوترك</span></header>
+<header><b>MaliAI</b><span>احكي أو صوّر فاتورة، وبتوصل لكمبيوترك</span></header>
 <p id="state" role="status" aria-live="polite">بربط مع الكمبيوتر…</p>
+<button id="cam" type="button">📷 صوّر فاتورة (أو اختار صور)</button>
+<input id="pick" type="file" accept="image/*" multiple hidden>
+<ul id="photos" aria-live="polite"></ul>
 <textarea id="text" placeholder="اكبس المايك واحكي، أو اكبس 🎤 بلوحة المفاتيح"></textarea>
 <p class="hint" id="hint">بعد ما تخلّص، اكبس «ابعت للكمبيوتر» والكلام بيطلع بمربّع الطلب هناك.</p>
 <div class="bar">
@@ -74,13 +84,14 @@ async function post(obj) {
 }
 const NO_PC = "انبعت، بس الكمبيوتر ما ردّ. تأكّد إنّ إكسل فاتح وإنّ MaliAI مربوط بهالتلفون (إذا انعمل «ربط جديد» صوّر الرمز الجديد).";
 (async () => {
-  if (!secret) { say("الصفحة مش مربوطة. افتح MaliAI بالكمبيوتر، اكبس 📱 وصوّر الرمز.", "bad"); $("send").disabled = $("mic").disabled = true; return; }
+  if (!secret) { say("الصفحة مش مربوطة. افتح MaliAI بالكمبيوتر، اكبس 📱 وصوّر الرمز.", "bad"); $("send").disabled = $("mic").disabled = $("cam").disabled = true; return; }
   try {
     link = await MaliPair.derive(secret);
     MaliPair.listen(link.topic, async m => {
       try {
         const p = await MaliPair.open(link.key, m.message);
         if (p.ack && acks[p.ack]) { acks[p.ack](true); delete acks[p.ack]; }
+        if (p.info) say("💻 " + p.info, "on");   // نتيجة التفريغ من الكمبيوتر
       } catch (x) {}
     }, relay, 1500);
     await new Promise(ok => setTimeout(ok, 1600));   // أوّل سؤال للوسيط قبل ما نسلّم على الكمبيوتر
@@ -104,6 +115,62 @@ $("send").onclick = async () => {
   finally { $("send").disabled = false; }
 };
 $("clear").onclick = () => { $("text").value = ""; $("text").focus(); };
+
+// صور الفواتير: بتصغر هون لأوضح حجم بيقبله Claude (أسرع رفع)، بتتشفّر، وبتنزل على تبويب الفواتير بالكمبيوتر وبتتفرّغ لحالها
+const MAX_PHOTOS = 20, PHOTO_WAIT = 30000;
+async function shrinkPhoto(file) {
+  const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+  const s = Math.min(1, 2576 / Math.max(bmp.width, bmp.height), Math.sqrt(4784 * 28 * 28 * 0.95 / (bmp.width * bmp.height)));
+  const c = document.createElement("canvas");
+  c.width = Math.round(bmp.width * s); c.height = Math.round(bmp.height * s);
+  const g = c.getContext("2d");
+  g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.imageSmoothingQuality = "high";
+  g.drawImage(bmp, 0, 0, c.width, c.height);
+  const blob = await new Promise(ok => c.toBlob(ok, "image/jpeg", 0.9));
+  return { bytes: new Uint8Array(await blob.arrayBuffer()), type: "image/jpeg" };
+}
+async function sendPhoto(file, i, of, li) {
+  const st = li.querySelector(".st");
+  st.textContent = "بجهّز الصورة…";
+  // صيغة ما بيقدر المتصفّح يفتحها (HEIC مثلاً) بتنبعت زي ما هي، والكمبيوتر بيحوّلها
+  const img = await shrinkPhoto(file).catch(() => null) || { bytes: new Uint8Array(await file.arrayBuffer()), type: file.type || "image/heic" };
+  st.textContent = `ببعت (${Math.round(img.bytes.length / 1024)} ك.ب)…`;
+  const n = crypto.getRandomValues(new Uint32Array(2)).join("-");
+  const got = new Promise(ok => { acks[n] = ok; setTimeout(() => { delete acks[n]; ok(false); }, PHOTO_WAIT); });
+  const name = file.name && !/^image\.\w+$/i.test(file.name) ? file.name.replace(/\.\w+$/, "") + (img.type === "image/jpeg" ? ".jpg" : "") : `فاتورة من التلفون ${new Date().toLocaleTimeString("en-GB").replace(/:/g, "-")} (${i}).jpg`;
+  const meta = await MaliPair.seal(link.key, { photo: true, n, name, type: img.type, i, of });
+  await MaliPair.upload(link.topic, await MaliPair.sealBytes(link.key, img.bytes), meta, relay);
+  st.textContent = "انبعتت، بستنّى الكمبيوتر…";
+  return { got };   // منرجّع الوعد بدون ما نستنّاه، عشان الصورة الجاية تنبعت فوراً
+}
+$("cam").onclick = () => $("pick").click();
+$("pick").onchange = async e => {
+  const files = [...e.target.files].slice(0, MAX_PHOTOS);
+  e.target.value = "";
+  if (!files.length || !link) return;
+  $("cam").disabled = true;
+  for (let i = 0; i < files.length; i++) {
+    const li = document.createElement("li"), im = document.createElement("img"), st = document.createElement("span");
+    im.src = URL.createObjectURL(files[i]); im.alt = ""; st.className = "st"; st.textContent = "بالدور…";
+    li.append(im, st); $("photos").prepend(li);
+    files[i].li = li;
+  }
+  // الرفع ورا بعض بدون ما نستنّى ردّ كل وحدة، فالكمبيوتر بيستلمهم سوا وبيفرّغهم دفعة وحدة
+  const waits = [];
+  for (let i = 0; i < files.length; i++) {
+    const li = files[i].li, st = li.querySelector(".st");
+    say(`ببعت صورة ${i + 1} من ${files.length}…`);
+    try {
+      const { got } = await sendPhoto(files[i], i + 1, files.length, li);
+      waits.push(got.then(ok => { li.className = ok ? "ok" : "bad"; st.textContent = ok ? "✓ وصلت للكمبيوتر، عم تتفرّغ" : "انبعتت بس الكمبيوتر ما ردّ"; return ok; }));
+    } catch (x) { li.className = "bad"; st.textContent = "✗ ما انبعتت: " + (x.message || x); }
+  }
+  if (waits.length) say("انبعتوا، بستنّى الكمبيوتر يستلمهم…");
+  const ok = (await Promise.all(waits)).filter(Boolean).length, n = files.length;
+  const count = k => k === 1 ? "الصورة" : k === 2 ? "الصورتين" : k + " صور";
+  say(ok === n ? `✓ وصلت ${count(ok)} للكمبيوتر. النتيجة بتطلع هون وبشيت «الفواتير».` : ok ? `وصل ${ok} من ${n}. الباقي جرّبه كمان مرّة.` : NO_PC, ok ? "on" : "bad");
+  $("cam").disabled = false;
+};
 
 // مايك التلفون: تفريغ المتصفّح نفسه (مجّاني)، والكلام بينكتب وإنت بتحكي
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;

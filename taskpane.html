@@ -6,7 +6,7 @@
 <title>MaliAI — تفريغ الفواتير</title>
 <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="pair.js"></script>
+<script src="pair.js?v=20261108"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -109,7 +109,7 @@
   <small>المفتاح بينحفظ على جهازك بس، مش بكود الصفحة. الكتابة بالصوت مجّانية وما بدها مفتاح.</small>
   <button id="save" type="button">احفظ</button>
 </details>
-<script src="core.js?v=20261107b"></script>
+<script src="core.js?v=20261108"></script>
 <script>
 // الأعمدة الجديدة بتنضاف بالآخر عشان الصفوف القديمة بالشيت تضلّ تحت عناوينها
 const INV_HEAD  = ["الملف", "المورّد", "الرقم الضريبي", "رقم الفاتورة", "التاريخ", "العملة", "قبل الضريبة", "الضريبة", "الإجمالي", "ملاحظات المحاسب", "الحساب", "نسبة الضريبة %"];
@@ -277,7 +277,9 @@ function sameInvoiceBefore(inv, hash) {   // نفس المورّد ورقم ال
 // ---------- التشغيل ----------
 let invAbort = null;
 $("stopInv").onclick = () => { if (invAbort) invAbort.abort(); setStatus("بوقّف…"); };
-async function run() {
+let lastDone = [];   // آخر دفعة انفرّغت (للخلاصة اللي بترجع للتلفون)
+async function runBatch() {
+  lastDone = [];
   const c = readCfg();
   if (!c.key || !c.url || !c.model) { $("settings").open = true; setStatus("حط المفتاح بالإعدادات واحفظ أوّل."); return; }
   if (c.provider === "anthropic" && overBudget()) { setStatus(overBudget()); return; }
@@ -347,14 +349,15 @@ async function run() {
     }
   }));
   $("stopInv").hidden = true;
-  const done = results.filter(Boolean);
+  const done = lastDone = results.filter(Boolean);
   const secs = ((performance.now() - t0) / 1000).toFixed(1);
   if (!done.length) { setStatus(signal.aborted ? "وقّفت قبل ما تخلص ولا فاتورة." : "ما انفرّغت ولا فاتورة."); $("go").disabled = false; return; }
   if (!inHost) { setStatus(`انفرّغت ${done.length} بـ ${secs} ث — بس الصفحة مش داخل إكسل، فما انكتبت.`); $("go").disabled = false; return; }
   try {
     await writeToExcel(done.map(r => r.inv), done.flatMap(r => r.items), done.map(r => r.doubt));
     const nDoubt = done.filter(r => r.doubt).length;
-    setStatus(`✓ انكتبت ${done.length} فاتورة بـ ${((performance.now() - t0) / 1000).toFixed(1)} ث (شيت «الفواتير» و«البنود»)` +
+    const nInv = done.length === 1 ? "فاتورة وحدة" : done.length === 2 ? "فاتورتين" : done.length <= 10 ? done.length + " فواتير" : done.length + " فاتورة";
+    setStatus(`✓ انكتبت ${nInv} بـ ${((performance.now() - t0) / 1000).toFixed(1)} ث (شيت «الفواتير» و«البنود»)` +
       (fromCache ? ` · ${fromCache} من الكاش` : "") + (signal.aborted ? " · وقّفت قبل الباقي" : "") + "." +
       (nDoubt ? ` ⚠️ ${nDoubt === 1 ? "فاتورة وحدة فيها" : nDoubt + " فواتير فيها"} أرقام مش أكيدة: ملاحظاتها بالأصفر بعمود «ملاحظات المحاسب»، راجعها من الأصل.` : ""));
     // اللي انكتبت بتطلع من القائمة، والفاشلة بتضل لإعادة المحاولة
@@ -364,7 +367,40 @@ async function run() {
   }
   addFiles([]);
 }
+// 📱 صور الفواتير من التلفون: بتنزل هون وبتتفرّغ لحالها، ٥ ٥ (حدّ الدفعة)، والخلاصة بترجع للتلفون
+const phoneInbox = [];
+let invBusy = false, phoneTimer = null;
+async function run() {
+  if (invBusy) return;
+  invBusy = true;
+  const fromPhone = queue.some(j => j.file.fromPhone);
+  try { await runBatch(); }
+  finally {
+    invBusy = false;
+    if (fromPhone) {
+      const lines = lastDone.map(r => `• ${r.inv[1] || "؟"}: ${r.inv[8] === "" ? "؟" : r.inv[8]} ${r.inv[5]}${r.doubt ? " ⚠️ في رقم مش أكيد" : ""}`);
+      tellPhone(lines.length ? `انفرّغت ${lines.length === 1 ? "فاتورة" : lines.length + " فواتير"} بشيت «الفواتير»:\n${lines.join("\n")}` : $("status").textContent);
+    }
+    if (phoneInbox.length) drainPhone();
+  }
+}
+function drainPhone() {
+  if (invBusy || !phoneInbox.length) return;
+  const room = MAX_FILES - queue.length;
+  if (room <= 0) return setStatus(`📱 في ${phoneInbox.length} صور من التلفون بتستنّى: فرّغ اللي بالقائمة أوّل.`);
+  addFiles(phoneInbox.splice(0, room));
+  run();
+}
 $("go").onclick = run;
+const MALI_PHONE = (files, meta = {}) => {
+  files.forEach(f => { f.fromPhone = true; });
+  phoneInbox.push(...files);
+  showTab(false);
+  const more = meta.of > 1 && meta.i < meta.of;   // التلفون بيقول كم صورة جاي: منستنّى آخر وحدة عشان دفعة وحدة
+  setStatus(`📱 وصلت ${phoneInbox.length === 1 ? "صورة" : phoneInbox.length + " صور"} من التلفون${more ? `، بستنّى الباقي (${meta.i} من ${meta.of})…` : "، بفرّغها هلّق…"}`);
+  clearTimeout(phoneTimer);
+  phoneTimer = setTimeout(drainPhone, more ? 20000 : 1500);
+};
 
 // =====================================================================
 // مساعد إكسل: Claude بدور MaliAI (محاسب + خبير إكسل) بأدوات محدّدة على الملف
@@ -1892,6 +1928,7 @@ const MALI = {
   defaultAsk: "فرّغ الفواتير المرفقة.",
   notInHost: "الصفحة مش داخل إكسل، فالأدوات ما رح تقدر توصل للملف.",
   showChat: () => showTab(true),
+  onPhoneFiles: (files, meta) => MALI_PHONE(files, meta),   // صور الفواتير من التلفون ← تبويب الفواتير
   turnStart: undoTurnStart, beforeTool: undoBeforeTool, turnEnd: undoTurnEnd   // ↩️ نقطة رجوع لكل طلب
 };
 maliStart();

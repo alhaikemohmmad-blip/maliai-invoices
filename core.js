@@ -1201,6 +1201,15 @@ function pairSecret(renew) {
 const phoneUrl = s => location.href.split("#")[0].replace(/[^/]*$/, "phone.html") + "#k=" + s + (relayHint ? "&r=" + encodeURIComponent(relayHint) : "");
 const pairState = (t, on = false) => { $("pairstate").textContent = t; $("pairstate").classList.toggle("on", on); };
 
+// رسالة للتلفون (نتيجة تفريغ الصور مثلاً): ما بتستنّى ردّ
+async function tellPhone(text) {
+  let s = null;
+  try { s = localStorage.getItem(pairKey()); } catch (e) {}
+  if (!s) return;
+  const { topic, key } = await MaliPair.derive(s);
+  await MaliPair.post(topic, await MaliPair.seal(key, { info: String(text).slice(0, 600) })).catch(() => {});
+}
+
 async function listenPhone() {
   let s = null;
   try { s = localStorage.getItem(pairKey()); } catch (e) {}
@@ -1212,10 +1221,24 @@ async function listenPhone() {
     seenPhone.add(m.id);
     let p;
     try { p = await MaliPair.open(key, m.message); } catch (x) { return; }   // مش من تلفوننا: بنتجاهله
-    if (p.ack) return;   // ردّنا إحنا
+    if (p.ack || p.info) return;   // ردودنا إحنا
+    const ack = () => { if (p.n) MaliPair.seal(key, { ack: p.n }).then(b => MaliPair.post(topic, b)).catch(() => {}); };
+    // صورة فاتورة: بننزّلها ونفكّ تشفيرها أوّل، و«وصلني» بس إذا زبطت
+    if (p.photo) {
+      if (!m.attachment || !m.attachment.url) return;
+      try {
+        const bytes = await MaliPair.openBytes(key, await MaliPair.download(m.attachment.url));
+        ack();
+        const file = new File([bytes], String(p.name || "فاتورة من التلفون.jpg"), { type: p.type || "image/jpeg" });
+        pairState(`✓ وصلت صورة من التلفون${p.of > 1 ? ` (${p.i} من ${p.of})` : ""}.`, true);
+        if (MALI.onPhoneFiles) MALI.onPhoneFiles([file], { i: p.i, of: p.of });
+        else { MALI.showChat(); attachFiles([file]); setC("📱 وصلت صورة من التلفون، انضافت للرسالة."); }
+      } catch (x) { setC("📱 وصلت صورة من التلفون بس ما قدرت أفتحها: " + (x.message || x)); }
+      return;
+    }
     // بنردّ «وصلني» عشان التلفون ما يكتب ✓ إلّا لمّا الكلام يوصل فعلاً
-    if (p.n) MaliPair.seal(key, { ack: p.n }).then(b => MaliPair.post(topic, b)).catch(() => {});
-    if (p.hello) { pairState("✓ التلفون مربوط. احكي فيه والكلام بيوصل هون.", true); return; }
+    ack();
+    if (p.hello) { pairState("✓ التلفون مربوط. احكي فيه أو صوّر فاتورة، وبتوصل هون.", true); return; }
     if (!p.text || !String(p.text).trim()) return;
     const a = $("ask");
     a.value = [a.value.trim(), String(p.text).trim()].filter(Boolean).join(" ");

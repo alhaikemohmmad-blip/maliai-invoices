@@ -23,6 +23,18 @@ const MaliPair = (() => {
     const b = unb64u(s);
     return JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b.slice(0, 12) }, key, b.slice(12))));
   }
+  // الصور: نفس المفتاح، بس بايتات بدل نصّ (الوسيط بيخزّن ملف ملخبط ساعة وبعدين بيمسحه)
+  async function sealBytes(key, bytes) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, bytes));
+    const out = new Uint8Array(12 + ct.length);
+    out.set(iv); out.set(ct, 12);
+    return out;
+  }
+  async function openBytes(key, buf) {
+    const b = new Uint8Array(buf);
+    return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b.slice(0, 12) }, key, b.slice(12)));
+  }
   // عنوان الوسيط (TryCloudflare) بيتغيّر لمّا السيرفر يعيد التشغيل، والسيرفر بيكتب الجديد بمستودع maliai-relay
   const RELAY_SRC = [
     ["https://api.github.com/repos/alhaikemohmmad-blip/maliai-relay/contents/relay.json", { Accept: "application/vnd.github.raw+json" }],
@@ -57,6 +69,28 @@ const MaliPair = (() => {
     }
     throw new Error("الوسيط مش واصل");
   }
+  // ملف مشفّر كمرفق، والوصف المختوم بعنوان X-Message
+  async function upload(topic, bytes, meta, hint) {
+    for (let i = 0; i < 2; i++) {
+      const base = await relay(i ? "" : hint, i > 0);
+      if (!base) break;
+      try {
+        const r = await fetch(`${base}/${topic}`, { method: "PUT", body: bytes, headers: { Filename: "p.bin", "X-Message": meta } });
+        if (r.ok) return;
+        if (r.status === 413) throw new Error("الصورة أكبر من المسموح");
+      } catch (e) { if (/المسموح/.test(e.message)) throw e; }
+      forgetRelay();
+    }
+    throw new Error("الوسيط مش واصل");
+  }
+  // عنوان المرفق بييجي على اسم ثابت (الوسيط ما بيعرف رابط النفق)، فمنركّب المسار على الرابط الحالي
+  async function download(url, hint) {
+    const base = await relay(hint);
+    if (!base) throw new Error("الوسيط مش واصل");
+    const r = await fetch(base + new URL(url).pathname, { cache: "no-store" });
+    if (!r.ok) throw new Error("ما قدرت أنزّل الصورة (" + r.status + ")");
+    return r.arrayBuffer();
+  }
   // TryCloudflare ما بيدعم الاستماع المباشر (SSE)، فمنسأل الوسيط كل كم ثانية عن الجديد
   function listen(topic, onMsg, hint, every = 3000) {
     let since = Math.floor(Date.now() / 1000), stopped = false, fails = 0;
@@ -80,7 +114,7 @@ const MaliPair = (() => {
     })();
     return () => { stopped = true; };
   }
-  return { newSecret, derive, seal, open, relay, post, listen };
+  return { newSecret, derive, seal, open, sealBytes, openBytes, relay, post, upload, download, listen };
 })();
 
 // تفريغ Google (كروم وأندرويد) بيرجّع الجملة كلّها من أوّلها مع كل كلمة جديدة («يعطيك» ← «يعطيك العافية»)،
