@@ -34,7 +34,9 @@ button:disabled{ opacity:.45; }
 #mic svg{ width:30px; height:30px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 #send{ flex:1; height:56px; background:var(--accent); color:#fff; font-weight:700; font-size:17px; }
 #clear{ flex:none; height:56px; padding:0 14px; background:var(--bg2); color:var(--fg2); }
-#cam{ width:100%; height:56px; background:var(--tint); color:var(--accent); font-weight:700; font-size:17px; border:1.5px dashed var(--accent); }
+.cams{ display:flex; gap:8px; }
+#cam{ flex:2; height:60px; background:var(--accent); color:#fff; font-weight:700; font-size:17px; }
+#gal{ flex:1; height:60px; background:var(--tint); color:var(--accent); font-weight:600; border:1.5px dashed var(--accent); }
 #photos{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; max-height:32vh; overflow:auto; }
 #photos li{ display:flex; align-items:center; gap:10px; padding:6px 8px; border-radius:10px; background:var(--bg2); font-size:14px; }
 #photos img{ flex:none; width:44px; height:44px; border-radius:8px; object-fit:cover; }
@@ -48,7 +50,12 @@ button:disabled{ opacity:.45; }
 <body>
 <header><b>MaliAI</b><span>احكي أو صوّر فاتورة، وبتوصل لكمبيوترك</span></header>
 <p id="state" role="status" aria-live="polite">بربط مع الكمبيوتر…</p>
-<button id="cam" type="button">📷 صوّر فاتورة (أو اختار صور)</button>
+<div class="cams">
+  <button id="cam" type="button">📷 صوّر فاتورة</button>
+  <button id="gal" type="button">🖼️ من الصور</button>
+</div>
+<!-- capture: بيفتح الكاميرا فوراً (أندرويد ما بيعرض الكاميرا مع «اختار أكثر من صورة») -->
+<input id="shoot" type="file" accept="image/*" capture="environment" hidden>
 <input id="pick" type="file" accept="image/*" multiple hidden>
 <ul id="photos" aria-live="polite"></ul>
 <textarea id="text" placeholder="اكبس المايك واحكي، أو اكبس 🎤 بلوحة المفاتيح"></textarea>
@@ -84,13 +91,13 @@ async function post(obj) {
 }
 const NO_PC = "انبعت، بس الكمبيوتر ما ردّ. تأكّد إنّ إكسل فاتح وإنّ MaliAI مربوط بهالتلفون (إذا انعمل «ربط جديد» صوّر الرمز الجديد).";
 (async () => {
-  if (!secret) { say("الصفحة مش مربوطة. افتح MaliAI بالكمبيوتر، اكبس 📱 وصوّر الرمز.", "bad"); $("send").disabled = $("mic").disabled = $("cam").disabled = true; return; }
+  if (!secret) { say("الصفحة مش مربوطة. افتح MaliAI بالكمبيوتر، اكبس 📱 وصوّر الرمز.", "bad"); $("send").disabled = $("mic").disabled = $("cam").disabled = $("gal").disabled = true; return; }
   try {
     link = await MaliPair.derive(secret);
     MaliPair.listen(link.topic, async m => {
       try {
         const p = await MaliPair.open(link.key, m.message);
-        if (p.ack && acks[p.ack]) { acks[p.ack](true); delete acks[p.ack]; }
+        if (p.ack && acks[p.ack]) { acks[p.ack](p); delete acks[p.ack]; }   // الردّ نفسه: للصور لازم يقول photo
         if (p.info) say("💻 " + p.info, "on");   // نتيجة التفريغ من الكمبيوتر
       } catch (x) {}
     }, relay, 1500);
@@ -116,19 +123,21 @@ $("send").onclick = async () => {
 };
 $("clear").onclick = () => { $("text").value = ""; $("text").focus(); };
 
-// صور الفواتير: بتصغر هون لأوضح حجم بيقبله Claude (أسرع رفع)، بتتشفّر، وبتنزل على تبويب الفواتير بالكمبيوتر وبتتفرّغ لحالها
-const MAX_PHOTOS = 20, PHOTO_WAIT = 30000;
+// صور الفواتير: بتتشفّر هون وبتنزل على تبويب الفواتير بالكمبيوتر وبتتفرّغ لحالها.
+// بتنبعت بدقّة عالية (لحدّ ١٢ ميغابكسل): الكمبيوتر بيعمل منها الصفحة كاملة + أجزاء مكبّرة عشان الأرقام الصغيرة تنقرا صح
+const MAX_PHOTOS = 20, PHOTO_WAIT = 40000;
 async function shrinkPhoto(file) {
   const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
-  const s = Math.min(1, 2576 / Math.max(bmp.width, bmp.height), Math.sqrt(4784 * 28 * 28 * 0.95 / (bmp.width * bmp.height)));
+  const s = Math.min(1, 4096 / Math.max(bmp.width, bmp.height), Math.sqrt(12.5e6 / (bmp.width * bmp.height)));
   const c = document.createElement("canvas");
   c.width = Math.round(bmp.width * s); c.height = Math.round(bmp.height * s);
   const g = c.getContext("2d");
   g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.imageSmoothingQuality = "high";
   g.drawImage(bmp, 0, 0, c.width, c.height);
-  const blob = await new Promise(ok => c.toBlob(ok, "image/jpeg", 0.9));
+  const blob = await new Promise(ok => c.toBlob(ok, "image/jpeg", 0.88));
   return { bytes: new Uint8Array(await blob.arrayBuffer()), type: "image/jpeg" };
 }
+const OLD_PC = "الكمبيوتر ردّ بس عليه نسخة قديمة من الإضافة، فالصورة ما انفرّغت. سكّر إكسل كلّه وافتحه من جديد، وابعتها كمان مرّة.";
 async function sendPhoto(file, i, of, li) {
   const st = li.querySelector(".st");
   st.textContent = "بجهّز الصورة…";
@@ -143,12 +152,18 @@ async function sendPhoto(file, i, of, li) {
   st.textContent = "انبعتت، بستنّى الكمبيوتر…";
   return { got };   // منرجّع الوعد بدون ما نستنّاه، عشان الصورة الجاية تنبعت فوراً
 }
-$("cam").onclick = () => $("pick").click();
-$("pick").onchange = async e => {
+$("cam").onclick = () => $("shoot").click();
+$("gal").onclick = () => $("pick").click();
+$("shoot").onchange = $("pick").onchange = e => {
   const files = [...e.target.files].slice(0, MAX_PHOTOS);
   e.target.value = "";
+  return sendBatch(files);
+};
+let sending = Promise.resolve();
+// كل دفعة بتستنّى اللي قبلها (لو صوّرت ورا بعض بسرعة)
+const sendBatch = files => (sending = sending.then(() => sendNow(files)).catch(() => {}));
+async function sendNow(files) {
   if (!files.length || !link) return;
-  $("cam").disabled = true;
   for (let i = 0; i < files.length; i++) {
     const li = document.createElement("li"), im = document.createElement("img"), st = document.createElement("span");
     im.src = URL.createObjectURL(files[i]); im.alt = ""; st.className = "st"; st.textContent = "بالدور…";
@@ -162,15 +177,21 @@ $("pick").onchange = async e => {
     say(`ببعت صورة ${i + 1} من ${files.length}…`);
     try {
       const { got } = await sendPhoto(files[i], i + 1, files.length, li);
-      waits.push(got.then(ok => { li.className = ok ? "ok" : "bad"; st.textContent = ok ? "✓ وصلت للكمبيوتر، عم تتفرّغ" : "انبعتت بس الكمبيوتر ما ردّ"; return ok; }));
+      // ✓ بس لمّا الكمبيوتر يقول إنّه استلم الصورة نفسها وحطّها للتفريغ؛ ردّ بدون photo = إضافة قديمة ما بتعرف الصور
+      waits.push(got.then(r => {
+        const res = r && r.photo ? "ok" : r && r.error ? "err" : r ? "old" : "none";
+        li.className = res === "ok" ? "ok" : "bad";
+        st.textContent = res === "ok" ? "✓ الكمبيوتر استلمها، عم تتفرّغ" : res === "err" ? "✗ " + r.error : res === "old" ? "✗ الكمبيوتر عليه نسخة قديمة" : "✗ انبعتت بس الكمبيوتر ما ردّ";
+        return res;
+      }));
     } catch (x) { li.className = "bad"; st.textContent = "✗ ما انبعتت: " + (x.message || x); }
   }
-  if (waits.length) say("انبعتوا، بستنّى الكمبيوتر يستلمهم…");
-  const ok = (await Promise.all(waits)).filter(Boolean).length, n = files.length;
+  if (waits.length) say("انبعتت، بستنّى الكمبيوتر يستلم…");
+  const res = await Promise.all(waits), ok = res.filter(r => r === "ok").length, n = files.length;
   const count = k => k === 1 ? "الصورة" : k === 2 ? "الصورتين" : k + " صور";
-  say(ok === n ? `✓ وصلت ${count(ok)} للكمبيوتر. النتيجة بتطلع هون وبشيت «الفواتير».` : ok ? `وصل ${ok} من ${n}. الباقي جرّبه كمان مرّة.` : NO_PC, ok ? "on" : "bad");
-  $("cam").disabled = false;
-};
+  say(ok === n ? `✓ الكمبيوتر استلم ${count(ok)}. النتيجة بتطلع هون وبشيت «الفواتير».`
+    : res.includes("old") ? OLD_PC : ok ? `وصل ${ok} من ${n}. الباقي جرّبه كمان مرّة.` : NO_PC, ok === n ? "on" : "bad");
+}
 
 // مايك التلفون: تفريغ المتصفّح نفسه (مجّاني)، والكلام بينكتب وإنت بتحكي
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;

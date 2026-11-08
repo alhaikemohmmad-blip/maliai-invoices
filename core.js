@@ -150,6 +150,23 @@ function shrink(src, w, h) {   // src: صورة أو canvas بحجمها الأ�
   g.drawImage(src, 0, 0, c.width, c.height);
   return c.toDataURL("image/jpeg", 0.9);
 }
+// رؤية أقوى لصور التلفون: الصورة الأصليّة (لحدّ ١٢ ميغابكسل) أكبر بكثير من اللي بيقبله Claude بالصورة الوحدة،
+// فبنبعت الصفحة كاملة (للترتيب) + ٢ أو ٣ أجزاء مكبّرة متداخلة شوي (للأرقام الصغيرة)، كلها بأوضح حجم مسموح
+function zoomViews(src, w, h) {
+  const full = shrink(src, w, h), ratio = (w * h) / MAX_PIXELS;
+  if (ratio < 1.6) return [full];   // الصورة أصلاً قريبة من أوضح حجم: التكبير ما بيزيد تفاصيل
+  const n = ratio > 4 ? 3 : 2, tall = h >= w, L = tall ? h : w, step = L / n, ov = L * 0.06, out = [full];
+  for (let k = 0; k < n; k++) {
+    const a = Math.max(0, k * step - ov), b = Math.min(L, (k + 1) * step + ov);
+    const [sx, sy, sw, sh] = tall ? [0, a, w, b - a] : [a, 0, b - a, h], s = fitScale(sw, sh);
+    const [c, g] = canvasFor(sw * s, sh * s);
+    g.imageSmoothingQuality = "high";
+    g.drawImage(src, sx, sy, sw, sh, 0, 0, c.width, c.height);
+    out.push(c.toDataURL("image/jpeg", 0.9));
+  }
+  return out;
+}
+const ZOOM_NOTE = n => `\n\nThe first picture is the whole page. The next ${n} pictures are enlarged parts of the same page, in order (top to bottom, or left to right), overlapping a little: read small or unclear digits from the enlarged parts and use the whole page for the layout. It is all one page, so never list a line twice.`;
 const isPdf = (file, ext) => file.type === "application/pdf" || ext === "pdf";
 async function openPdf(file) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
@@ -175,7 +192,8 @@ async function toParts(file) {
     await lib("heic");
     const jpg = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.9 });
     const bmp = await createImageBitmap(Array.isArray(jpg) ? jpg[0] : jpg);
-    return { images: [shrink(bmp, bmp.width, bmp.height)] };
+    const images = zoomViews(bmp, bmp.width, bmp.height);
+    return { images, zoom: images.length - 1 };
   }
   if (/^tiff?$/.test(ext) || file.type === "image/tiff") {           // السكانرات
     await lib("utif");
@@ -200,8 +218,9 @@ async function toParts(file) {
     return { text: r.value };
   }
   try {
-    const bmp = await createImageBitmap(file);
-    return { images: [shrink(bmp, bmp.width, bmp.height)] };
+    const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+    const images = zoomViews(bmp, bmp.width, bmp.height);
+    return { images, zoom: images.length - 1 };
   } catch (e) {}
   const text = await file.text();   // XML / CSV / TXT / HTML / EML…
   if (!text.trim() || text.slice(0, 2000).includes("\u0000"))
@@ -593,7 +612,8 @@ const PREVIEW_LINES = 40;
 // ولو في رقم بالقائمة مش موجود بالنصّ، قراءة ثالثة بتدقّق بالصورة على الأرقام المختلف عليها بس.
 // أيّ رقم لسّا مش أكيد بينكتب ⟦القراءة؟⟧ أو ⟦قراءة | قراءة؟⟧، والمساعد بيحكي للمحاسب عنه قبل ما يستعمله.
 const DIGIT_RULES = `Numbers matter most: read every number digit by digit. Digits run left to right even inside Arabic text, so never reverse them. Keep separators exactly as printed (٫ or . for decimals, ٬ or , for thousands).
-Digits that are easy to confuse: ٠ and ٥ and a dot; ٢ and ٣; ٤ and ٦ (Persian ۴ and ۶); ٧ and ٨; 1 and 7; 3 and 8; 5 and 6; 0 and 6. Look twice at handwriting, stamps, faint or folded spots.`;
+Digits that are easy to confuse: ٠ and ٥ and a dot; ٢ and ٣; ٤ and ٦ (Persian ۴ and ۶); ٧ and ٨; 1 and 7; 3 and 8; 5 and 6; 0 and 6. Look twice at handwriting, stamps, faint or folded spots.
+Phone photos can be tilted, curled, shadowed or a little blurred: follow each row straight across to its own amount, and when a digit is blurred, mark the doubt instead of guessing.`;
 const DOUBT_RULE = `If you are not completely sure of a number, even slightly, write it as ⟦your reading؟⟧, or ⟦reading A | reading B؟⟧ when two readings are possible. Never silently pick one.`;
 const OCR_PROMPT = `Transcribe this page into plain text exactly as printed, in reading order and in its original language.
 Keep every number, date, name and code exactly as written. Write each table row on one line with | between cells, keeping دينار and فلس columns as printed.
@@ -626,8 +646,11 @@ function numDiff(a, b) {   // الأرقام اللي بقراءة وحدة وم
   return { a: onlyA, b: [...left].flatMap(([n, k]) => Array(k).fill(n)) };
 }
 const DOUBT_MARK = /⟦[^⟧]*⟧/g;
-async function ocr(img, c, signal) {
-  const ask = (p, effort) => (c.provider === "anthropic" ? askClaude : askOpenAI)([img], p, c, signal, effort);
+// imgs: صفحة وحدة؛ أوّل صورة الصفحة كاملة، والباقي (لو في) أجزاء مكبّرة منها
+async function ocr(imgs, c, signal) {
+  imgs = [].concat(imgs);
+  const zoom = imgs.length > 1 ? ZOOM_NOTE(imgs.length - 1) : "";
+  const ask = (p, effort) => (c.provider === "anthropic" ? askClaude : askOpenAI)(imgs, p + zoom, c, signal, effort);
   const [text, list] = await Promise.all([ask(OCR_PROMPT), ask(NUMS_PROMPT).catch(e => { if (signal && signal.aborted) throw e; return ""; })]);
   if (!list.trim()) return text;
   // الأرقام اللي عليها علامة شكّ بتنحسب مختلف عليها، فبتنعاد تدقيقها كمان
@@ -665,7 +688,8 @@ async function fileToDraft(file, c, signal) {
   const parts = await toParts(file);   // Word وXML وCSV نصّ؛ الصور بتنقرا بالنموذج مرّة وحدة
   if (parts.text) return { kind: "text", meta: `ملف .${ext}`, text: parts.text };
   const text = [];
-  for (const img of parts.images) text.push(await ocr(img, c, signal));
+  if (parts.zoom) text.push(await ocr(parts.images, c, signal));   // صورة وحدة + أجزاءها المكبّرة = صفحة وحدة
+  else for (const img of parts.images) text.push(await ocr(img, c, signal));
   return { kind: "image", meta: text.length > 1 ? `صور، ${nPages(text.length)}، انقرت بالنموذج` : "صورة، انقرت بالنموذج", text: pages(text, "صفحة") };
 }
 
@@ -1222,18 +1246,22 @@ async function listenPhone() {
     let p;
     try { p = await MaliPair.open(key, m.message); } catch (x) { return; }   // مش من تلفوننا: بنتجاهله
     if (p.ack || p.info) return;   // ردودنا إحنا
-    const ack = () => { if (p.n) MaliPair.seal(key, { ack: p.n }).then(b => MaliPair.post(topic, b)).catch(() => {}); };
-    // صورة فاتورة: بننزّلها ونفكّ تشفيرها أوّل، و«وصلني» بس إذا زبطت
+    const ack = (extra = {}) => { if (p.n) MaliPair.seal(key, { ack: p.n, ...extra }).then(b => MaliPair.post(topic, b)).catch(() => {}); };
+    // صورة فاتورة: بننزّلها ونفكّ تشفيرها ونحطّها للتفريغ أوّل، وبعدها بس منردّ «استلمت» (photo: true)
     if (p.photo) {
-      if (!m.attachment || !m.attachment.url) return;
       try {
+        if (!m.attachment || !m.attachment.url) throw new Error("الصورة ما وصلت مع الرسالة");
         const bytes = await MaliPair.openBytes(key, await MaliPair.download(m.attachment.url));
-        ack();
         const file = new File([bytes], String(p.name || "فاتورة من التلفون.jpg"), { type: p.type || "image/jpeg" });
         pairState(`✓ وصلت صورة من التلفون${p.of > 1 ? ` (${p.i} من ${p.of})` : ""}.`, true);
         if (MALI.onPhoneFiles) MALI.onPhoneFiles([file], { i: p.i, of: p.of });
         else { MALI.showChat(); attachFiles([file]); setC("📱 وصلت صورة من التلفون، انضافت للرسالة."); }
-      } catch (x) { setC("📱 وصلت صورة من التلفون بس ما قدرت أفتحها: " + (x.message || x)); }
+        ack({ photo: true });
+      } catch (x) {
+        const why = String((x && x.message) || x);
+        setC("📱 وصلت صورة من التلفون بس ما قدرت أفتحها: " + why);
+        ack({ error: "الكمبيوتر ما قدر يفتحها: " + why });
+      }
       return;
     }
     // بنردّ «وصلني» عشان التلفون ما يكتب ✓ إلّا لمّا الكلام يوصل فعلاً
@@ -1280,7 +1308,28 @@ $("paircopy").onclick = async () => {
 function setStatus(t) { const el = $("status") || $("cstatus"); if (el) el.textContent = t; }
 document.onpaste = e => attachFiles(e.clipboardData.files);   // الصفحة بتقدر تبدّلها
 
+// إكسل بيحفظ نسخة الإضافة القديمة أحياناً لساعات، فبنسأل الموقع: لو في نسخة أجدد، شريط «حدّث هلّق» بكبسة
+// (بدونه التلفون ممكن يحكي مع نسخة قديمة ما بتعرف الميزة الجديدة)
+async function checkUpdate() {
+  try {
+    const mine = ([...document.scripts].map(s => s.src).find(s => /core\.js\?v=/.test(s)) || "").match(/v=(\w+)/);
+    if (!mine || document.getElementById("upd")) return;
+    const html = await (await fetch(location.href.split("#")[0].split("?")[0] + "?u=" + Date.now(), { cache: "no-store" })).text();
+    const live = (html.match(/core\.js\?v=(\w+)/) || [])[1];
+    if (!live || live === mine[1]) return;
+    const bar = document.createElement("div"), b = document.createElement("button");
+    bar.id = "upd"; bar.setAttribute("role", "status");
+    bar.style.cssText = "position:sticky;top:0;z-index:50;display:flex;gap:8px;align-items:center;justify-content:space-between;padding:8px 12px;background:#107c41;color:#fff;font-weight:600;font-size:13px";
+    bar.textContent = "🔄 في نسخة جديدة من الإضافة";
+    b.type = "button"; b.textContent = "حدّث هلّق";
+    b.style.cssText = "border:0;border-radius:999px;padding:4px 12px;background:#fff;color:#107c41;font:inherit;cursor:pointer";
+    b.onclick = () => location.reload();
+    bar.append(b); document.body.prepend(bar);
+  } catch (e) {}
+}
+
 function maliStart() {
+  setTimeout(checkUpdate, 15000); setInterval(checkUpdate, 30 * 60e3);
   fillCfg();
   loadVault();
   loadChat();

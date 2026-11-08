@@ -109,7 +109,7 @@
   <small>المفتاح بينحفظ على جهازك بس، مش بكود الصفحة. الكتابة بالصوت مجّانية وما بدها مفتاح.</small>
   <button id="save" type="button">احفظ</button>
 </details>
-<script src="core.js?v=20261108"></script>
+<script src="core.js?v=20261108b"></script>
 <script>
 // الأعمدة الجديدة بتنضاف بالآخر عشان الصفوف القديمة بالشيت تضلّ تحت عناوينها
 const INV_HEAD  = ["الملف", "المورّد", "الرقم الضريبي", "رقم الفاتورة", "التاريخ", "العملة", "قبل الضريبة", "الضريبة", "الإجمالي", "ملاحظات المحاسب", "الحساب", "نسبة الضريبة %"];
@@ -160,9 +160,10 @@ drop.ondragleave = () => drop.classList.remove("over");
 drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); addFiles(e.dataTransfer.files); };
 $("clear").onclick = () => { queue.length = 0; $("list").innerHTML = ""; addFiles([]); setStatus(""); };
 
-async function extract({ images = [], text = "" }, c, extra = "", signal, effort = "low") {
+async function extract({ images = [], text = "", zoom = 0 }, c, extra = "", signal, effort = "low") {
   if (!images.length && !text.trim()) throw new Error("ما لقيت إشي أقرأه بالملف");
-  const prompt = (text ? PROMPT + "\n\nInvoice content:\n" + text.slice(0, MAX_TEXT) : PROMPT) + extra;
+  // صورة تلفون: الصفحة كاملة + أجزاء مكبّرة منها (رؤية أوضح للأرقام الصغيرة)
+  const prompt = (text ? PROMPT + "\n\nInvoice content:\n" + text.slice(0, MAX_TEXT) : PROMPT) + (zoom ? ZOOM_NOTE(zoom) : "") + extra;
   const content = c.provider === "anthropic" ? await askClaude(images, prompt, c, signal, effort) : await askOpenAI(images, prompt, c, signal);
   const m = String(content).match(/\{[\s\S]*\}/);
   if (!m) throw new Error("النموذج ما رجّع بيانات مفهومة");
