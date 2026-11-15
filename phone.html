@@ -4,7 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#107c41">
-<title>MaliAI · احكي للكمبيوتر</title>
+<title>MONE · احكي للكمبيوتر</title>
+<link rel="icon" href="assets/icon-32.png">
+<link rel="apple-touch-icon" href="assets/mone-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -16,7 +18,8 @@
 html, body{ height:100%; }
 body{ margin:0; padding:16px 16px calc(16px + env(safe-area-inset-bottom)); background:var(--bg); color:var(--fg);
   font:16px/1.6 "IBM Plex Sans Arabic","Segoe UI",Tahoma,sans-serif; display:flex; flex-direction:column; gap:12px; }
-header{ display:flex; align-items:baseline; gap:8px; }
+header{ display:flex; align-items:center; gap:8px; }
+.avatar{ flex:none; width:26px; height:26px; border-radius:50%; }
 header b{ font-size:19px; color:var(--accent); }
 header span{ color:var(--fg2); font-size:14px; }
 #state{ margin:0; padding:8px 12px; border-radius:10px; background:var(--bg2); color:var(--fg2); font-size:14px; white-space:pre-line; }
@@ -48,7 +51,7 @@ button:disabled{ opacity:.45; }
 </style>
 </head>
 <body>
-<header><b>MaliAI</b><span>احكي أو صوّر فاتورة، وبتوصل لكمبيوترك</span></header>
+<header><img class="avatar" src="assets/mone-64.png" alt="" width="26" height="26"><b>MONE</b><span>احكي أو صوّر فاتورة، وبتوصل لكمبيوترك</span></header>
 <p id="state" role="status" aria-live="polite">بربط مع الكمبيوتر…</p>
 <div class="cams">
   <button id="cam" type="button">📷 صوّر فاتورة</button>
@@ -89,9 +92,9 @@ async function post(obj) {
   await MaliPair.post(link.topic, await MaliPair.seal(link.key, { ...obj, n }), relay);
   return got;
 }
-const NO_PC = "انبعت، بس الكمبيوتر ما ردّ. تأكّد إنّ إكسل فاتح وإنّ MaliAI مربوط بهالتلفون (إذا انعمل «ربط جديد» صوّر الرمز الجديد).";
+const NO_PC = "انبعت، بس الكمبيوتر ما ردّ. تأكّد إنّ إكسل فاتح وإنّ MONE مربوط بهالتلفون (إذا انعمل «ربط جديد» صوّر الرمز الجديد).";
 (async () => {
-  if (!secret) { say("الصفحة مش مربوطة. افتح MaliAI بالكمبيوتر، اكبس 📱 وصوّر الرمز.", "bad"); $("send").disabled = $("mic").disabled = $("cam").disabled = $("gal").disabled = true; return; }
+  if (!secret) { say("الصفحة مش مربوطة. افتح MONE بالكمبيوتر، اكبس 📱 وصوّر الرمز.", "bad"); $("send").disabled = $("mic").disabled = $("cam").disabled = $("gal").disabled = true; return; }
   try {
     link = await MaliPair.derive(secret);
     MaliPair.listen(link.topic, async m => {

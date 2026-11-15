@@ -6,11 +6,11 @@
            xsi:type="TaskPaneApp">
 
   <Id>acfd0fd6-2c5e-418d-a30b-111a9c7c78d4</Id>
-  <Version>1.0.0.0</Version>
-  <ProviderName>MaliAI</ProviderName>
+  <Version>1.0.1.0</Version>
+  <ProviderName>MONE</ProviderName>
   <DefaultLocale>ar-JO</DefaultLocale>
 
-  <DisplayName DefaultValue="MaliAI"/>
+  <DisplayName DefaultValue="MONE"/>
   <Description DefaultValue="بيفرّغ الفواتير (صور أو PDF) لجدول إكسل بسرعة: المورّد، الرقم، التاريخ، البنود، الضريبة والإجمالي."/>
 
   <IconUrl DefaultValue="https://alhaikemohmmad-blip.github.io/maliai-invoices/assets/icon-32.png"/>
@@ -88,9 +88,9 @@
         <bt:Url id="Url.Support" DefaultValue="https://alhaikemohmmad-blip.github.io/maliai-invoices/"/>
       </bt:Urls>
       <bt:ShortStrings>
-        <bt:String id="Group.Label" DefaultValue="MaliAI"/>
+        <bt:String id="Group.Label" DefaultValue="MONE"/>
         <bt:String id="Btn.Label" DefaultValue="تفريغ الفواتير"/>
-        <bt:String id="GetStarted.Title" DefaultValue="MaliAI جاهز"/>
+        <bt:String id="GetStarted.Title" DefaultValue="MONE جاهز"/>
       </bt:ShortStrings>
       <bt:LongStrings>
         <bt:String id="Btn.Tip" DefaultValue="افتح اللوحة واسحب الفواتير (صور أو PDF) — بتنكتب بجدول إكسل."/>

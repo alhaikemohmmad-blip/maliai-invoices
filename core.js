@@ -623,10 +623,10 @@ $("vexport").onclick = async () => {
   try {
     await lib("jszip");
     const zip = new JSZip();
-    for (const n of VAULT.values()) zip.file("MaliAI/" + n.path, n.text);
+    for (const n of VAULT.values()) zip.file("MONE/" + n.path, n.text);
     const url = URL.createObjectURL(await zip.generateAsync({ type: "blob" }));
     const a = document.createElement("a");
-    a.href = url; a.download = "MaliAI-vault.zip"; a.click();
+    a.href = url; a.download = "MONE-vault.zip"; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   } catch (e) { $("cstatus").textContent = "ما قدرت أنزّل الخزنة: " + (e.message || e); }
 };
@@ -636,7 +636,7 @@ $("vfiles").onchange = async e => {
   e.target.value = "";
   try {
     for (const f of files) await putNote({ path: MEM_DIR + safeName(f.name.replace(/\.md$/i, "")) + ".md", text: (await f.text()).trim() });
-    $("cstatus").textContent = `انضافت ${files.length} ملاحظة لذاكرة MaliAI.`;
+    $("cstatus").textContent = `انضافت ${files.length} ملاحظة لذاكرة MONE.`;
   } catch (err) { $("cstatus").textContent = "ما قدرت أستورد: " + (err.message || err); }
 };
 // ---------- مرفقات المحادثة ----------

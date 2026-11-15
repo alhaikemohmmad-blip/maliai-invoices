@@ -3,18 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MaliAI — تفريغ الفواتير</title>
+<title>MONE — تفريغ الفواتير</title>
+<link rel="icon" href="assets/icon-32.png">
 <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="pair.js?v=20261108"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="app.css?v=20261104">
+<link rel="stylesheet" href="app.css?v=20261115">
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="mark" aria-hidden="true"></span><b>MaliAI</b><span>محاسبك جوّا إكسل</span></div>
+  <div class="brand"><img class="avatar" src="assets/mone-64.png" alt="" width="22" height="22"><b>MONE</b><span>محاسبك جوّا إكسل</span></div>
   <button id="newchat" class="ghost" type="button" title="بتمسح المحادثة بس، والذاكرة والمسودات بيضلّوا" hidden>محادثة جديدة</button>
 </header>
 <div class="tabs" role="tablist">
@@ -71,9 +72,9 @@
   <input id="cfiles" type="file" multiple hidden>
   <p id="cstatus" role="status" aria-live="polite"></p>
   <details id="vault">
-    <summary>🧠 خزنة MaliAI: ذاكرة ومسودات (<span id="vaultN">0</span>)</summary>
+    <summary>🧠 خزنة MONE: ذاكرة ومسودات (<span id="vaultN">0</span>)</summary>
     <ul id="vaultList"></ul>
-    <small>الذاكرة ملاحظات مرتّبة بصيغة Obsidian ومربوطة ببعض، وكل ملف بترفعه بينقرا مرّة وحدة وبينحفظ مسودة. الاثنين بيضلّوا بين المحادثات على هالجهاز، وMaliAI بيرجعلهم لحاله. اكبس ✕ لتمسح وحدة.</small>
+    <small>الذاكرة ملاحظات مرتّبة بصيغة Obsidian ومربوطة ببعض، وكل ملف بترفعه بينقرا مرّة وحدة وبينحفظ مسودة. الاثنين بيضلّوا بين المحادثات على هالجهاز، وMONE بيرجعلهم لحاله. اكبس ✕ لتمسح وحدة.</small>
     <div class="row">
       <button id="vexport" type="button">⬇ نزّلها لـ Obsidian</button>
       <button id="vimport" type="button">⬆ استورد ملاحظات .md</button>
@@ -109,7 +110,7 @@
   <small>المفتاح بينحفظ على جهازك بس، مش بكود الصفحة. الكتابة بالصوت مجّانية وما بدها مفتاح.</small>
   <button id="save" type="button">احفظ</button>
 </details>
-<script src="core.js?v=20261108c"></script>
+<script src="core.js?v=20261115"></script>
 <script>
 // الأعمدة الجديدة بتنضاف بالآخر عشان الصفوف القديمة بالشيت تضلّ تحت عناوينها
 const INV_HEAD  = ["الملف", "المورّد", "الرقم الضريبي", "رقم الفاتورة", "التاريخ", "العملة", "قبل الضريبة", "الضريبة", "الإجمالي", "ملاحظات المحاسب", "الحساب", "نسبة الضريبة %"];
@@ -404,9 +405,9 @@ const MALI_PHONE = (files, meta = {}) => {
 };
 
 // =====================================================================
-// مساعد إكسل: Claude بدور MaliAI (محاسب + خبير إكسل) بأدوات محدّدة على الملف
+// مساعد إكسل: Claude بدور MONE (محاسب + خبير إكسل) بأدوات محدّدة على الملف
 // =====================================================================
-const EXCEL_SYSTEM = `You are MaliAI, the accountant's teammate working inside their open Excel workbook.
+const EXCEL_SYSTEM = `You are MONE, the accountant's teammate working inside their open Excel workbook.
 You are a senior chartered accountant in Jordan (IFRS; Jordanian General Sales Tax, standard rate 16%) and an Excel expert with more than ten years of daily use who knows every corner of Excel: formulas (XLOOKUP, SUMIFS, INDEX/MATCH, LET, LAMBDA, dynamic arrays), tables, pivot tables, charts, conditional formatting, data validation, named ranges and clean professional layouts. You can build complex workbooks from scratch and safely modify existing ones.
 
 How you work:
