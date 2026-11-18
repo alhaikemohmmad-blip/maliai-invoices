@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MONE — تفريغ الفواتير</title>
 <link rel="icon" href="assets/icon-32.png">
+<script>try{if(window.chrome&&window.chrome.webview&&!/host_Info/i.test(location.href)&&!sessionStorage.getItem("hostInfoValue"))sessionStorage.setItem("hostInfoValue","Excel$Win32$16.01$ar-JO$$$$0");}catch(e){}</script>
 <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="pair.js?v=20261108"></script>
@@ -110,7 +111,7 @@
   <small>المفتاح بينحفظ على جهازك بس، مش بكود الصفحة. الكتابة بالصوت مجّانية وما بدها مفتاح.</small>
   <button id="save" type="button">احفظ</button>
 </details>
-<script src="core.js?v=20261115"></script>
+<script src="core.js?v=20261118"></script>
 <script>
 // الأعمدة الجديدة بتنضاف بالآخر عشان الصفوف القديمة بالشيت تضلّ تحت عناوينها
 const INV_HEAD  = ["الملف", "المورّد", "الرقم الضريبي", "رقم الفاتورة", "التاريخ", "العملة", "قبل الضريبة", "الضريبة", "الإجمالي", "ملاحظات المحاسب", "الحساب", "نسبة الضريبة %"];
@@ -354,7 +355,7 @@ async function runBatch() {
   const done = lastDone = results.filter(Boolean);
   const secs = ((performance.now() - t0) / 1000).toFixed(1);
   if (!done.length) { setStatus(signal.aborted ? "وقّفت قبل ما تخلص ولا فاتورة." : "ما انفرّغت ولا فاتورة."); $("go").disabled = false; return; }
-  if (!inHost) { setStatus(`انفرّغت ${done.length} بـ ${secs} ث — بس الصفحة مش داخل إكسل، فما انكتبت.`); $("go").disabled = false; return; }
+  if (!(await ensureHost())) { setStatus(`انفرّغت ${done.length} بـ ${secs} ث — بس الصفحة مش داخل إكسل، فما انكتبت.`); $("go").disabled = false; return; }
   try {
     await writeToExcel(done.map(r => r.inv), done.flatMap(r => r.items), done.map(r => r.doubt));
     const nDoubt = done.filter(r => r.doubt).length;
@@ -1667,7 +1668,7 @@ async function undoPage(ctx, p, liveId, rep) {
 
 async function undoBeforeTool(name, a) {
   const cp = undoTurn;
-  if (!inHost || !cp || !undoMutates(name, a)) return;
+  if (!(await ensureHost()) || !cp || !undoMutates(name, a)) return;
   cp.tools.push(name);
   try {
     await Excel.run(async ctx => {
@@ -1896,7 +1897,7 @@ async function undoClick(cp) {
 }
 
 async function selectionNote() {
-  if (!inHost) return "";
+  if (!(await ensureHost())) return "";
   try {
     return await Excel.run(async ctx => {
       const s = ctx.workbook.worksheets.getActiveWorksheet(); s.load("name");

@@ -40,7 +40,62 @@ You read every invoice the way an accountant books it: carefully, never guessing
 You know the Jordanian General Sales Tax: the standard rate is 16%; some goods and services are 0%, exempt, or at special rates; a valid tax invoice shows the seller's tax number.`;
 
 const $ = id => document.getElementById(id);
-let inHost = false;   // جوّا إكسل/وورد (حسب MALI.host)
+let inHost = false, hostReadyPromise = null;   // جوّا إكسل/وورد (حسب MALI.host)
+const hostApiReady = () => {
+  const h = typeof MALI !== "undefined" && window[MALI.host];
+  return !!(h && typeof h.run === "function");
+};
+const isHostDetected = info => {
+  if (hostApiReady()) return true;
+  const h = typeof MALI !== "undefined" && MALI.host;
+  if (!h) return false;
+  if (info && String(info.host || "").toLowerCase() === h.toLowerCase()) return true;
+  try {
+    if (typeof Office !== "undefined" && Office.context) {
+      if (String(Office.context.host || "").toLowerCase() === h.toLowerCase()) return true;
+      if (h === "Excel" && Office.context.workbook) return true;
+      if (h === "Word" && Office.context.document) return true;
+    }
+  } catch (e) {}
+  return false;
+};
+const looksLikeOffice = () => {
+  const h = (typeof MALI !== "undefined" && MALI.host) || "";
+  const re = new RegExp("_host_Info|" + (h || "excel|word"), "i");
+  try {
+    if (re.test(location.search) || re.test(location.hash)) return true;
+    if (re.test(sessionStorage.getItem("hostInfoValue") || "") || sessionStorage.getItem("maliai.inHost") === h) return true;
+  } catch (e) {}
+  try {
+    if ([...document.scripts].some(s => /appsforoffice\.microsoft\.com\/.*\/(excel|word|office_strings|osfweb)/i.test(s.src))) return true;
+  } catch (e) {}
+  try { if (window.chrome && window.chrome.webview) return true; } catch (e) {}
+  try { if (window.external && "GetContext" in window.external) return true; } catch (e) {}
+  return false;
+};
+function setInHost() {
+  inHost = true;
+  try { if (typeof MALI !== "undefined" && MALI.host) sessionStorage.setItem("maliai.inHost", MALI.host); } catch (e) {}
+  if (typeof MALI !== "undefined" && MALI.notInHost && typeof UI !== "undefined") {
+    const before = UI.length;
+    UI = UI.filter(it => it.text !== MALI.notInHost);
+    if ($("chat")) [...$("chat").querySelectorAll(".msg.err")].forEach(d => {
+      if (d.textContent.trim() === MALI.notInHost) d.remove();
+    });
+    if (UI.length !== before) saveChat();
+  }
+}
+async function ensureHost() {
+  if (hostApiReady()) { setInHost(); return true; }
+  if (hostReadyPromise) await hostReadyPromise;
+  if (hostApiReady() || isHostDetected()) { setInHost(); }
+  if (!hostApiReady() && (inHost || looksLikeOffice())) {
+    const until = Date.now() + 10000;
+    while (Date.now() < until && !hostApiReady()) await sleep(100);
+    if (hostApiReady() || isHostDetected() || looksLikeOffice()) setInHost();
+  }
+  return inHost;
+}
 // ---------- الإعدادات (على الجهاز فقط) ----------
 // النموذج ثابت عشان ميزانية الشهر تكفي: Sonnet 5.5 لكل الشغل، وOpus 5.5 بس لفاتورة أرقامها ما طابقت حتى بعد قراءتين
 const CLAUDE = "claude-sonnet-5-5", CLAUDE_STRONG = "claude-opus-5-5";
@@ -478,7 +533,13 @@ async function loadChat() {
     CHAT = s.CHAT; ctxSent = !!s.ctxSent;
     lastAt = s.at || (s.CHAT.length ? 1 : 0);   // محادثة محفوظة قبل هالتحديث: الطلب الجاي بيبلّش جديدة
     staleChat = s.CHAT.length > 0 && s.sig !== chatSig();
-    for (const it of s.UI || []) say(it.cls, it.text);
+    const rawUI = s.UI || [];
+    let cleaned = false;
+    for (const it of rawUI) {
+      if (it.text === MALI.notInHost) { cleaned = true; continue; }
+      say(it.cls, it.text);
+    }
+    if (cleaned) saveChat();
   } catch (e) {}
 }
 
@@ -807,7 +868,7 @@ async function chatSend() {
     clearChat(); prevChat = old ? old.path : "";
     say("step", `🆕 بلّشت محادثة جديدة لحالها ${why}، عشان الطلب يضلّ رخيص.` + (old ? ` القديمة انحفظت بالخزنة «${title(old.path)}» وبرجعلها إذا احتجتها.` : ""));
   }
-  if (!inHost) say("err", MALI.notInHost);
+  if (!(await ensureHost())) say("err", MALI.notInHost);
   $("ask").value = ""; attached = []; attachFiles([]);
   say("me", text + (files.length ? "\n📎 " + files.map(f => f.name || "صورة ملصوقة").join("، ") : ""));
   $("send").hidden = true; $("stop").hidden = false; $("cstatus").classList.add("busy"); stopAsked = false;
@@ -1007,7 +1068,8 @@ const srOff = () => { try { return !!localStorage.getItem(SR_OFF); } catch (e) {
 
 // إكسل على النت بيطلب إذن المايك أوّل مرّة، وبعد أوّل موافقة لازم اللوحة تعيد تحميل
 async function micAllowed() {
-  if (inHost && Office.context.platform === Office.PlatformType.OfficeOnline && Office.devicePermission) {
+  await ensureHost();
+  if (inHost && typeof Office !== "undefined" && Office.context && Office.context.platform === Office.PlatformType.OfficeOnline && Office.devicePermission) {
     if (await Office.devicePermission.requestPermissions([Office.DevicePermissionType.microphone])) {
       try { sessionStorage.setItem("maliai.mic", "1"); } catch (e) {}
       location.reload();
@@ -1400,9 +1462,26 @@ async function checkUpdate() {
 
 function maliStart() {
   setTimeout(checkUpdate, 15000); setInterval(checkUpdate, 30 * 60e3);
+  if (isHostDetected() || looksLikeOffice()) setInHost();
+  try {
+    const prevInit = Office.initialize;
+    Office.initialize = reason => {
+      if (typeof prevInit === "function") try { prevInit(reason); } catch (e) {}
+      if (isHostDetected() || looksLikeOffice()) setInHost();
+    };
+  } catch (e) {}
+  hostReadyPromise = new Promise(ok => {
+    const t = setTimeout(ok, 6000);
+    try {
+      Office.onReady(info => {
+        clearTimeout(t);
+        if (isHostDetected(info) || looksLikeOffice()) setInHost();
+        ok();
+      });
+    } catch (e) { clearTimeout(t); ok(); }
+  });
   fillCfg();
   loadVault();
   loadChat();
   listenPhone();   // إذا التلفون مربوط من قبل، الكلام بيوصل حتى لو اللوحة مسكّرة
-  Office.onReady(info => { inHost = info.host === MALI.host; });
 }
