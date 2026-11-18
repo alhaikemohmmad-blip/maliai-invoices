@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MONE — تفريغ الفواتير</title>
 <link rel="icon" href="assets/icon-32.png">
-<script>try{if(window.chrome&&window.chrome.webview&&!/host_Info/i.test(location.href)&&!sessionStorage.getItem("hostInfoValue"))sessionStorage.setItem("hostInfoValue","Excel$Win32$16.01$ar-JO$$$$0");}catch(e){}</script>
+<script>try{if(sessionStorage.getItem("hostInfoValue")==="Excel$Win32$16.01$ar-JO$$$$0")sessionStorage.removeItem("hostInfoValue");}catch(e){}</script>
 <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="pair.js?v=20261108"></script>
@@ -111,7 +111,7 @@
   <small>المفتاح بينحفظ على جهازك بس، مش بكود الصفحة. الكتابة بالصوت مجّانية وما بدها مفتاح.</small>
   <button id="save" type="button">احفظ</button>
 </details>
-<script src="core.js?v=20261118"></script>
+<script src="core.js?v=20261118b"></script>
 <script>
 // الأعمدة الجديدة بتنضاف بالآخر عشان الصفوف القديمة بالشيت تضلّ تحت عناوينها
 const INV_HEAD  = ["الملف", "المورّد", "الرقم الضريبي", "رقم الفاتورة", "التاريخ", "العملة", "قبل الضريبة", "الضريبة", "الإجمالي", "ملاحظات المحاسب", "الحساب", "نسبة الضريبة %"];

@@ -43,7 +43,8 @@ const $ = id => document.getElementById(id);
 let inHost = false, hostReadyPromise = null;   // جوّا إكسل/وورد (حسب MALI.host)
 const hostApiReady = () => {
   const h = typeof MALI !== "undefined" && window[MALI.host];
-  return !!(h && typeof h.run === "function");
+  const rich = typeof OSF !== "undefined" && OSF.DDA && OSF.DDA.RichApi && typeof OSF.DDA.RichApi.executeRichApiRequestAsync === "function";
+  return !!(h && typeof h.run === "function" && rich);
 };
 const isHostDetected = info => {
   if (hostApiReady()) return true;
@@ -64,10 +65,7 @@ const looksLikeOffice = () => {
   const re = new RegExp("_host_Info|" + (h || "excel|word"), "i");
   try {
     if (re.test(location.search) || re.test(location.hash)) return true;
-    if (re.test(sessionStorage.getItem("hostInfoValue") || "") || sessionStorage.getItem("maliai.inHost") === h) return true;
-  } catch (e) {}
-  try {
-    if ([...document.scripts].some(s => /appsforoffice\.microsoft\.com\/.*\/(excel|word|office_strings|osfweb)/i.test(s.src))) return true;
+    if (re.test(sessionStorage.getItem("hostInfoValue") || "")) return true;
   } catch (e) {}
   try { if (window.chrome && window.chrome.webview) return true; } catch (e) {}
   try { if (window.external && "GetContext" in window.external) return true; } catch (e) {}
@@ -75,7 +73,6 @@ const looksLikeOffice = () => {
 };
 function setInHost() {
   inHost = true;
-  try { if (typeof MALI !== "undefined" && MALI.host) sessionStorage.setItem("maliai.inHost", MALI.host); } catch (e) {}
   if (typeof MALI !== "undefined" && MALI.notInHost && typeof UI !== "undefined") {
     const before = UI.length;
     UI = UI.filter(it => it.text !== MALI.notInHost);
@@ -88,11 +85,11 @@ function setInHost() {
 async function ensureHost() {
   if (hostApiReady()) { setInHost(); return true; }
   if (hostReadyPromise) await hostReadyPromise;
-  if (hostApiReady() || isHostDetected()) { setInHost(); }
-  if (!hostApiReady() && (inHost || looksLikeOffice())) {
-    const until = Date.now() + 10000;
-    while (Date.now() < until && !hostApiReady()) await sleep(100);
-    if (hostApiReady() || isHostDetected() || looksLikeOffice()) setInHost();
+  if (hostApiReady() || isHostDetected()) { setInHost(); return true; }
+  if (looksLikeOffice()) {
+    const until = Date.now() + 5000;
+    while (Date.now() < until && !hostApiReady() && !isHostDetected()) await sleep(100);
+    if (hostApiReady() || isHostDetected()) { setInHost(); return true; }
   }
   return inHost;
 }
@@ -1462,12 +1459,12 @@ async function checkUpdate() {
 
 function maliStart() {
   setTimeout(checkUpdate, 15000); setInterval(checkUpdate, 30 * 60e3);
-  if (isHostDetected() || looksLikeOffice()) setInHost();
+  if (isHostDetected()) setInHost();
   try {
     const prevInit = Office.initialize;
     Office.initialize = reason => {
       if (typeof prevInit === "function") try { prevInit(reason); } catch (e) {}
-      if (isHostDetected() || looksLikeOffice()) setInHost();
+      if (isHostDetected()) setInHost();
     };
   } catch (e) {}
   hostReadyPromise = new Promise(ok => {
@@ -1475,7 +1472,7 @@ function maliStart() {
     try {
       Office.onReady(info => {
         clearTimeout(t);
-        if (isHostDetected(info) || looksLikeOffice()) setInHost();
+        if (isHostDetected(info)) setInHost();
         ok();
       });
     } catch (e) { clearTimeout(t); ok(); }
